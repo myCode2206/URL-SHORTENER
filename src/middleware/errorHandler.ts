@@ -40,7 +40,8 @@ export function toAppError(err: unknown): AppError {
 
   if (err instanceof ZodError) {
     const details = err.issues.map((issue) => ({
-      field: issue.path.join('.'),
+      // Unknown keys are reported on the parent object; name the keys instead.
+      field: issue.code === 'unrecognized_keys' ? issue.keys.join(', ') : issue.path.join('.'),
       message: issue.message,
     }));
     return new AppError(400, 'VALIDATION_ERROR', 'Request validation failed', details);

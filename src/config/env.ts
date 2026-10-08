@@ -13,6 +13,18 @@ const envSchema = z.object({
   DATABASE_URL: z
     .string()
     .regex(/^postgres(ql)?:\/\//, 'must be a postgresql:// connection string'),
+  // The public origin short links are built on, e.g. https://sho.rt
+  BASE_URL: z
+    .url({ protocol: /^https?$/ })
+    // Zod runs refinements even after .url() fails, so guard the parse.
+    .refine(
+      (value) => URL.canParse(value) && new URL(value).pathname === '/',
+      'must be an origin with no path',
+    )
+    .transform((value) => new URL(value).origin),
+  // Key for scrambling database IDs into short codes. Changing it changes every
+  // future code, so it must stay fixed for the life of the deployment.
+  SHORT_CODE_SECRET: z.string().min(32, 'must be at least 32 characters'),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -34,6 +46,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     shutdownTimeoutMs: vars.SHUTDOWN_TIMEOUT_MS,
     version: vars.APP_VERSION,
     databaseUrl: vars.DATABASE_URL,
+    baseUrl: vars.BASE_URL,
+    shortCodeSecret: vars.SHORT_CODE_SECRET,
   } as const;
 }
 

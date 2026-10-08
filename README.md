@@ -8,8 +8,8 @@ A URL shortener built to production standards with Node.js, TypeScript, Express,
 | ----- | ---------------------------------- | ------- |
 | 1     | Project setup, TypeScript, Express | ✅ Done |
 | 2     | PostgreSQL and Prisma              | ✅ Done |
-| 3     | URL creation and Base62            | ⏳ Next |
-| 4     | Redirects                          |         |
+| 3     | URL creation and Base62            | ✅ Done |
+| 4     | Redirects                          | ⏳ Next |
 | 5     | Redis caching                      |         |
 | 6     | Authentication                     |         |
 | 7     | URL management                     |         |
@@ -39,7 +39,13 @@ Then check it is running:
 ```bash
 curl localhost:3000/health   # is the process alive?
 curl localhost:3000/ready    # should it receive traffic? (checks the database)
+
+curl -X POST localhost:3000/api/v1/urls \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://example.com/very/long/url"}'
 ```
+
+Interactive API docs (Swagger UI) are at <http://localhost:3000/docs>, and the raw OpenAPI document is at `/docs/openapi.json`.
 
 ## Scripts
 
@@ -65,9 +71,15 @@ curl localhost:3000/ready    # should it receive traffic? (checks the database)
 src/
 ├── config/env.ts          # Reads and validates every environment variable
 ├── infrastructure/
-│   └── database/          # Prisma client, readiness check, outage detection
+│   └── database/          # Prisma client, ID generator, readiness check
+├── docs/openapi.ts        # OpenAPI 3.1 document, built from the Zod schemas
 ├── middleware/            # Request IDs and the central error handler
-├── modules/health/        # Liveness and readiness endpoints
+├── modules/
+│   ├── health/            # Liveness and readiness endpoints
+│   └── urls/              # routes → controller → service → repository
+│       ├── shortCode.ts       # ID → scramble (Feistel) → 7-char Base62
+│       └── destinationUrl.ts  # URL validation and SSRF rules
+├── container.ts           # Composition root: wires concrete implementations
 ├── utils/                 # Logger and AppError
 ├── app.ts                 # Builds the Express app; doesn't start a server
 └── server.ts              # Starts the server and handles graceful shutdown
@@ -103,6 +115,22 @@ updated_at                 original_url                        user_agent, refer
 | `clicks(url_id, clicked_at)`              | Analytics for one URL over a time range             |
 
 Deleting a user deletes their URLs and clicks (`ON DELETE CASCADE`). Deleting a URL through the API is a soft delete (`deleted_at`), so its alias can never be claimed by someone else.
+
+## How short codes are generated
+
+```text
+POST /api/v1/urls
+  → validate the URL (http/https only, no private IPs, no credentials)
+  → id = nextval(urls_id_seq)          e.g. 6
+  → permute id with a keyed Feistel network (reversible, so no collisions)
+  → Base62-encode to 7 characters      e.g. "Kotrc16"
+  → INSERT (id, short_code, original_url)
+```
+
+- **No collisions by construction.** The sequence never repeats a value, and both the permutation and Base62 encoding are reversible. No "generate, check, retry" loop is needed.
+- **Not guessable.** Consecutive IDs give unrelated codes, so nobody can walk through every link or tell how many exist without `SHORT_CODE_SECRET`.
+- **Swappable ID source.** `IdGenerator` is an interface. A Snowflake-style or block-reserving generator can replace the Postgres sequence without touching the service.
+- **Capacity.** 62⁷ ≈ 3.5 trillion codes.
 
 ## Error format
 

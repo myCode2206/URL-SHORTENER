@@ -1,14 +1,13 @@
 import { createApp } from './app';
 import { loadConfig } from './config/env';
-import { createPrismaClient, databaseCheck } from './infrastructure/database/prisma';
-import { HealthService } from './modules/health/health.service';
+import { createContainer } from './container';
 import { createLogger } from './utils/logger';
 
 const config = loadConfigOrExit();
 const logger = createLogger(config);
-const prisma = createPrismaClient(config, logger);
-const health = new HealthService([databaseCheck(prisma)]);
-const app = createApp({ config, logger, health });
+const container = createContainer(config, logger);
+const { prisma, health } = container;
+const app = createApp({ config, logger, ...container });
 
 // Connect eagerly so a misconfigured DATABASE_URL shows up in the first log
 // lines. A failure is not fatal: Prisma retries on the next query, and /ready
