@@ -10,6 +10,9 @@ const envSchema = z.object({
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   APP_VERSION: z.string().min(1).default('dev'),
+  DATABASE_URL: z
+    .string()
+    .regex(/^postgres(ql)?:\/\//, 'must be a postgresql:// connection string'),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -30,6 +33,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     trustProxy: vars.TRUST_PROXY,
     shutdownTimeoutMs: vars.SHUTDOWN_TIMEOUT_MS,
     version: vars.APP_VERSION,
+    databaseUrl: vars.DATABASE_URL,
   } as const;
 }
 

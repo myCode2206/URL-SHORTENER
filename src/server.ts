@@ -1,12 +1,22 @@
 import { createApp } from './app';
 import { loadConfig } from './config/env';
+import { createPrismaClient, databaseCheck } from './infrastructure/database/prisma';
 import { HealthService } from './modules/health/health.service';
 import { createLogger } from './utils/logger';
 
 const config = loadConfigOrExit();
 const logger = createLogger(config);
-const health = new HealthService([]);
+const prisma = createPrismaClient(config, logger);
+const health = new HealthService([databaseCheck(prisma)]);
 const app = createApp({ config, logger, health });
+
+// Connect eagerly so a misconfigured DATABASE_URL shows up in the first log
+// lines. A failure is not fatal: Prisma retries on the next query, and /ready
+// reports 503 until the database is reachable. The process doesn't crash-loop.
+prisma
+  .$connect()
+  .then(() => logger.info('database connected'))
+  .catch((err: unknown) => logger.error({ err }, 'database unreachable at startup'));
 
 const server = app.listen(config.port, () => {
   logger.info({ port: config.port }, 'server listening');
@@ -40,8 +50,14 @@ function shutdown(signal: string): void {
   // Stop accepting connections and wait for in-flight requests to finish.
   server.close((err) => {
     if (err) logger.error({ err }, 'error while closing server');
-    logger.info('shutdown complete');
-    process.exit(err ? 1 : 0);
+    // Only after the last request has finished: release database connections.
+    void prisma
+      .$disconnect()
+      .catch((disconnectErr: unknown) => logger.error({ err: disconnectErr }, 'disconnect failed'))
+      .finally(() => {
+        logger.info('shutdown complete');
+        process.exit(err ? 1 : 0);
+      });
   });
   server.closeIdleConnections();
 }

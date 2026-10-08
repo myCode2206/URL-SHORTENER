@@ -11,14 +11,19 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "jest",
-    "test:unit": "jest tests/unit",
-    "test:integration": "jest tests/integration"
+    "test:unit": "jest --selectProjects unit",
+    "test:integration": "jest --selectProjects integration",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio"
   },
   "engines": {
     "node": ">=24"
   },
   "license": "MIT",
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "express": "^5.2.1",
     "pino": "^10.4.0",
     "pino-http": "^11.0.0",
@@ -34,11 +39,15 @@
     "jest": "^30.5.2",
     "pino-pretty": "^13.2.0",
     "prettier": "^3.9.9",
+    "prisma": "^6.19.3",
     "supertest": "^7.3.1",
     "ts-jest": "^29.4.14",
     "tsx": "^4.23.15",
     "typescript": "~5.9",
     "typescript-eslint": "^8.71.1"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "deepmerge-ts": "^8.0.0"
+  }
 }

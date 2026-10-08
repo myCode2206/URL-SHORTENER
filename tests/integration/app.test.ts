@@ -1,5 +1,7 @@
 import request from 'supertest';
-import { buildTestApp } from '../helpers/testApp';
+import { createPrismaClient, databaseCheck } from '../../src/infrastructure/database/prisma';
+import { createLogger } from '../../src/utils/logger';
+import { buildTestApp, testConfig } from '../helpers/testApp';
 
 describe('GET /health', () => {
   it('returns liveness information', async () => {
@@ -47,6 +49,35 @@ describe('GET /ready', () => {
     const { app, health } = buildTestApp();
     health.markShuttingDown();
     expect((await request(app).get('/ready')).status).toBe(503);
+  });
+});
+
+describe('GET /ready with PostgreSQL', () => {
+  function clientFor(databaseUrl?: string) {
+    const config = testConfig(databaseUrl ? { DATABASE_URL: databaseUrl } : {});
+    return createPrismaClient(config, createLogger(config));
+  }
+
+  it('is ready when the real database answers', async () => {
+    const prisma = clientFor();
+    const { app } = buildTestApp({ checks: [databaseCheck(prisma)] });
+
+    const res = await request(app).get('/ready');
+
+    expect(res.status).toBe(200);
+    expect(res.body.checks.database).toMatchObject({ status: 'up' });
+    await prisma.$disconnect();
+  });
+
+  it('returns 503, not a crash, when the database is unreachable', async () => {
+    const prisma = clientFor('postgresql://user:pass@127.0.0.1:1/down_test?connect_timeout=2');
+    const { app } = buildTestApp({ checks: [databaseCheck(prisma)] });
+
+    const res = await request(app).get('/ready');
+
+    expect(res.status).toBe(503);
+    expect(res.body.checks.database).toMatchObject({ status: 'down', error: 'unreachable' });
+    await prisma.$disconnect();
   });
 });
 

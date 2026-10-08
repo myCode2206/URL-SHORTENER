@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { ZodError } from 'zod';
+import { isDatabaseUnavailableError } from '../infrastructure/database/prisma';
 import { AppError } from '../utils/errors';
 
 export const notFoundHandler: RequestHandler = (req, _res, next) => {
@@ -14,6 +15,8 @@ export const errorHandler: ErrorRequestHandler = (err: unknown, req, res, next) 
   const appError = toAppError(err);
   // pino-http logs the failed request once, including this error and its stack.
   if (appError.statusCode >= 500 && err instanceof Error) res.err = err;
+  // Tells well-behaved clients the outage is temporary and when to try again.
+  if (appError.statusCode === 503) res.set('Retry-After', '5');
 
   res.status(appError.statusCode).json({
     success: false,
@@ -26,8 +29,14 @@ export const errorHandler: ErrorRequestHandler = (err: unknown, req, res, next) 
   });
 };
 
-function toAppError(err: unknown): AppError {
+export function toAppError(err: unknown): AppError {
   if (err instanceof AppError) return err;
+
+  // A database outage is not a bug in the request, so it gets a 503 the client
+  // can retry rather than a 500.
+  if (isDatabaseUnavailableError(err)) {
+    return new AppError(503, 'SERVICE_UNAVAILABLE', 'Service is temporarily unavailable');
+  }
 
   if (err instanceof ZodError) {
     const details = err.issues.map((issue) => ({
