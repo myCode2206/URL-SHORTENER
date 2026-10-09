@@ -124,8 +124,13 @@ export function buildOpenApiDocument(config: Config) {
           tags: ['Health'],
           summary: 'Readiness: can this instance serve traffic?',
           responses: {
-            200: { description: 'All dependencies are up' },
-            503: { description: 'A dependency is down or the instance is shutting down' },
+            200: {
+              description:
+                'Critical dependencies (PostgreSQL) are up. `degraded: true` means an optional one (Redis) is down: still serving, from the database.',
+            },
+            503: {
+              description: 'A critical dependency is down or the instance is shutting down',
+            },
           },
         },
       },

@@ -6,7 +6,7 @@ import { createLogger } from './utils/logger';
 const config = loadConfigOrExit();
 const logger = createLogger(config);
 const container = createContainer(config, logger);
-const { prisma, health, clickRecorder } = container;
+const { prisma, redis, health, clickRecorder } = container;
 const app = createApp({ config, logger, ...container });
 clickRecorder.start();
 
@@ -51,10 +51,11 @@ function shutdown(signal: string): void {
   server.close((err) => {
     if (err) logger.error({ err }, 'error while closing server');
     // Only after the last request has finished: write any buffered clicks,
-    // then release database connections.
+    // then release database and Redis connections.
     void clickRecorder
       .stop()
       .then(() => prisma.$disconnect())
+      .then(() => redis.quit())
       .catch((disconnectErr: unknown) => logger.error({ err: disconnectErr }, 'disconnect failed'))
       .finally(() => {
         logger.info('shutdown complete');

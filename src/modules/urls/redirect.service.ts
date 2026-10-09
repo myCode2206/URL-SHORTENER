@@ -1,5 +1,7 @@
 import { AppError } from '../../utils/errors';
+import { SingleFlight } from '../../utils/singleFlight';
 import type { ClickRecorder } from '../analytics/clickEvent';
+import type { RedirectCache } from './redirectCache';
 import { isShortCodeFormat } from './shortCode';
 import type { RedirectTarget, UrlRepository } from './urls.repository';
 
@@ -24,6 +26,7 @@ export interface Visit {
 
 export interface RedirectServiceDependencies {
   repository: Pick<UrlRepository, 'findRedirectTarget'>;
+  cache: Pick<RedirectCache, 'get' | 'set'>;
   clickRecorder: ClickRecorder;
   now?: () => Date;
 }
@@ -31,12 +34,15 @@ export interface RedirectServiceDependencies {
 const notFound = () => new AppError(404, 'URL_NOT_FOUND', 'Short URL does not exist');
 
 // The hot path: runs on every click, so it does as little as possible.
-// 1. Reject malformed codes without touching the database.
-// 2. One indexed lookup (Phase 5 puts Redis in front of it).
-// 3. Check expired/disabled in memory.
+// 1. Reject malformed codes without touching Redis or the database.
+// 2. Redis: hit → use it (including a cached "doesn't exist").
+//    Miss → one indexed PostgreSQL lookup, then store the result in Redis.
+// 3. Check expired/disabled in memory. This runs on cached entries too, so an
+//    entry cached before its expiry time still stops redirecting on time.
 // 4. Hand the click to the recorder, which returns immediately.
 export class RedirectService {
   private readonly now: () => Date;
+  private readonly databaseLookups = new SingleFlight<string, RedirectTarget | null>();
 
   constructor(private readonly deps: RedirectServiceDependencies) {
     this.now = deps.now ?? (() => new Date());
@@ -47,7 +53,7 @@ export class RedirectService {
     // that can't exist is never looked up.
     if (!isShortCodeFormat(shortCode)) throw notFound();
 
-    const target = await this.deps.repository.findRedirectTarget(shortCode);
+    const target = await this.findTarget(shortCode);
     if (!target) throw notFound();
 
     const now = this.now();
@@ -69,5 +75,21 @@ export class RedirectService {
       });
     }
     return target.originalUrl;
+  }
+
+  // Cache-aside: the application reads the cache, and on a miss reads the
+  // database and fills the cache itself.
+  private async findTarget(shortCode: string): Promise<RedirectTarget | null> {
+    const cached = await this.deps.cache.get(shortCode);
+    if (cached.hit) return cached.target;
+
+    // If 1,000 requests miss on the same code at once, they share one query.
+    return this.databaseLookups.run(shortCode, async () => {
+      const target = await this.deps.repository.findRedirectTarget(shortCode);
+      // Not awaited: the visitor shouldn't wait for the cache write. set()
+      // never throws, so nothing is left unhandled.
+      void this.deps.cache.set(shortCode, target);
+      return target;
+    });
   }
 }

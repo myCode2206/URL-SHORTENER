@@ -4,9 +4,15 @@ const required = {
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/app',
   BASE_URL: 'https://sho.rt',
   SHORT_CODE_SECRET: 'x'.repeat(32),
+  REDIS_URL: 'redis://:pass@localhost:6379/0',
 };
 
 describe('loadConfig', () => {
+  it('accepts rediss:// for TLS connections (ElastiCache in transit encryption)', () => {
+    const config = loadConfig({ ...required, REDIS_URL: 'rediss://cache.aws:6379' });
+    expect(config.redis.url).toBe('rediss://cache.aws:6379');
+  });
+
   it('normalises BASE_URL to a bare origin', () => {
     expect(loadConfig({ ...required, BASE_URL: 'https://SHO.RT/' }).baseUrl).toBe('https://sho.rt');
   });
@@ -23,6 +29,8 @@ describe('loadConfig', () => {
       version: 'dev',
       databaseUrl: required.DATABASE_URL,
       baseUrl: 'https://sho.rt',
+      redis: { url: required.REDIS_URL, commandTimeoutMs: 100, connectTimeoutMs: 2000 },
+      cache: { ttlSeconds: 3600, negativeTtlSeconds: 60 },
     });
   });
 
@@ -50,6 +58,9 @@ describe('loadConfig', () => {
     [{ BASE_URL: 'ftp://sho.rt' }, 'BASE_URL'],
     [{ BASE_URL: 'https://sho.rt/links' }, 'BASE_URL'],
     [{ SHORT_CODE_SECRET: 'too-short' }, 'SHORT_CODE_SECRET'],
+    [{ REDIS_URL: undefined }, 'REDIS_URL'],
+    [{ REDIS_URL: 'http://localhost:6379' }, 'REDIS_URL'],
+    [{ CACHE_TTL_SECONDS: '0' }, 'CACHE_TTL_SECONDS'],
   ])('fails fast with a message naming the bad variable: %j', (env, name) => {
     expect(() => loadConfig({ ...required, ...env })).toThrow(
       new RegExp(`Invalid environment configuration[\\s\\S]*${name}`),

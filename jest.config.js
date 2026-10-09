@@ -10,13 +10,14 @@ module.exports = {
   projects: [
     // Unit tests need no running infrastructure.
     { ...shared, displayName: 'unit', roots: ['<rootDir>/tests/unit'] },
-    // Integration tests run against real PostgreSQL. Migrations are applied once,
-    // before any test file runs.
+    // Integration tests run against real PostgreSQL and Redis. Migrations are
+    // applied once, before any test file runs.
     {
       ...shared,
       displayName: 'integration',
       roots: ['<rootDir>/tests/integration'],
       globalSetup: '<rootDir>/tests/integration/global-setup.ts',
+      setupFilesAfterEnv: ['<rootDir>/tests/integration/teardown.ts'],
     },
   ],
 };

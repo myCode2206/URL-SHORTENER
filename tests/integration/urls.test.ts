@@ -1,12 +1,12 @@
 import request from 'supertest';
 import { createShortCodeCodec } from '../../src/modules/urls/shortCode';
-import { resetDatabase } from '../helpers/database';
+import { resetState } from '../helpers/database';
 import { buildTestApp } from '../helpers/testApp';
 
-const { app, prisma } = buildTestApp();
+const { app, prisma, redis } = buildTestApp();
 const codec = createShortCodeCodec(process.env.SHORT_CODE_SECRET!);
 
-beforeEach(() => resetDatabase(prisma));
+beforeEach(() => resetState({ prisma, redis }));
 afterAll(() => prisma.$disconnect());
 
 const shorten = (body: unknown) =>

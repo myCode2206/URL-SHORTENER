@@ -1,4 +1,6 @@
+import { once } from 'node:events';
 import { existsSync } from 'node:fs';
+import type { Redis } from 'ioredis';
 import type { Database } from '../../src/infrastructure/database/prisma';
 
 // Uses TEST_DATABASE_URL if set (as in CI); otherwise DATABASE_URL from .env with
@@ -23,4 +25,16 @@ export function resolveTestDatabaseUrl(): string {
 
 export async function resetDatabase(prisma: Database): Promise<void> {
   await prisma.$executeRawUnsafe('TRUNCATE users, urls, clicks RESTART IDENTITY CASCADE');
+}
+
+// IDs restart at 1 after a reset, so codes repeat across tests. Redis must be
+// cleared too, or a test could read the previous test's cached entry.
+export async function resetState({ prisma, redis }: { prisma: Database; redis: Redis }) {
+  await Promise.all([resetDatabase(prisma), whenRedisReady(redis).then(() => redis.flushdb())]);
+}
+
+// The app's client rejects commands until it has connected (no offline queue,
+// by design). In production that's a cache miss; tests need a known state.
+export async function whenRedisReady(redis: Redis): Promise<void> {
+  if (redis.status !== 'ready') await once(redis, 'ready');
 }

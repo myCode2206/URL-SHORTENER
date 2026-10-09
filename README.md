@@ -10,8 +10,8 @@ A URL shortener built to production standards with Node.js, TypeScript, Express,
 | 2     | PostgreSQL and Prisma              | ✅ Done |
 | 3     | URL creation and Base62            | ✅ Done |
 | 4     | Redirects                          | ✅ Done |
-| 5     | Redis caching                      | ⏳ Next |
-| 6     | Authentication                     |         |
+| 5     | Redis caching                      | ✅ Done |
+| 6     | Authentication                     | ⏳ Next |
 | 7     | URL management                     |         |
 | 8     | Expiration and custom aliases      |         |
 | 9     | Analytics                          |         |
@@ -28,8 +28,8 @@ You need Node.js 24 or later and Docker.
 
 ```bash
 npm install
-cp .env.example .env     # then set POSTGRES_PASSWORD and the same password in DATABASE_URL
-npm run db:up            # starts PostgreSQL and waits until it is healthy
+cp .env.example .env     # then set the passwords (Postgres and Redis) and their URLs
+npm run db:up            # starts PostgreSQL and Redis, waits until both are healthy
 npm run db:deploy        # applies all migrations
 npm run dev              # starts with auto-reload and readable logs
 ```
@@ -38,7 +38,7 @@ Then check it is running:
 
 ```bash
 curl localhost:3000/health   # is the process alive?
-curl localhost:3000/ready    # should it receive traffic? (checks the database)
+curl localhost:3000/ready    # should it receive traffic? (checks PostgreSQL and Redis)
 
 curl -X POST localhost:3000/api/v1/urls \
   -H 'Content-Type: application/json' \
@@ -62,7 +62,7 @@ Interactive API docs (Swagger UI) are at <http://localhost:3000/docs>, and the r
 | `npm run typecheck`        | Checks types without writing any files                                |
 | `npm run lint`             | Runs ESLint with type-aware rules                                     |
 | `npm run format`           | Formats the code with Prettier                                        |
-| `npm run db:up`            | Starts PostgreSQL in Docker                                           |
+| `npm run db:up`            | Starts PostgreSQL and Redis in Docker                                 |
 | `npm run db:migrate`       | After editing `schema.prisma`: creates a new migration and applies it |
 | `npm run db:deploy`        | Applies pending migrations (what production runs)                     |
 | `npm run db:studio`        | Opens Prisma Studio to browse the data                                |
@@ -73,14 +73,17 @@ Interactive API docs (Swagger UI) are at <http://localhost:3000/docs>, and the r
 src/
 ├── config/env.ts          # Reads and validates every environment variable
 ├── infrastructure/
-│   └── database/          # Prisma client, ID generator, readiness check
+│   ├── database/          # Prisma client, ID generator, readiness check
+│   └── redis/             # Redis client (fail-fast) and readiness check
 ├── docs/openapi.ts        # OpenAPI 3.1 document, built from the Zod schemas
 ├── middleware/            # Request IDs and the central error handler
+├── utils/singleFlight.ts  # Merges concurrent identical lookups
 ├── modules/
 │   ├── analytics/         # Click events, buffered recorder, batch writer
 │   ├── health/            # Liveness and readiness endpoints
 │   └── urls/              # routes → controller → service → repository
 │       ├── redirect.*         # GET /:shortCode, the hot path
+│       ├── redirectCache.ts   # Redis cache-aside for redirect targets
 │       ├── shortCode.ts       # ID → scramble (Feistel) → 7-char Base62
 │       └── destinationUrl.ts  # URL validation and SSRF rules
 ├── container.ts           # Composition root: wires concrete implementations
@@ -157,6 +160,36 @@ every second, in the background:
 - **Clicks never slow a redirect down.** The redirect returns before the click is written. Up to 10,000 clicks wait in memory, and beyond that new clicks are dropped instead of using up memory. Clicks still in the buffer are written on graceful shutdown; Phase 9 moves them to a durable queue.
 - **Browsers get an HTML page** for dead links; API clients get the JSON error format.
 - **Measured, without a cache yet:** 6,373 redirects/s, p50 2.7 ms, p99 8.4 ms, on one process on a laptop.
+
+## Redis caching
+
+```text
+GET /Kotrc16
+  → Redis GET redirect:v1:Kotrc16
+      hit               → use it (a cached "-" means the code doesn't exist → 404)
+      miss / Redis down → PostgreSQL lookup (identical concurrent misses share one query)
+                          → Redis SET, not awaited
+  → expiry and disabled checks run on every request, cached or not
+```
+
+| Decision      | Choice                                              | Why                                                                                              |
+| ------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Pattern       | Cache-aside plus write-through on create            | New links are clicked right after they're shared, so the first click is already a hit            |
+| TTL           | 1 hour ±10% random jitter                           | Bounds staleness; the jitter stops links created in a burst from all expiring in the same second |
+| Missing codes | Cached for 60 s                                     | Bots and scanners requesting missing codes don't reach Postgres                                  |
+| Stampede      | Single-flight per process                           | 1,000 simultaneous misses on a hot link cost 1 query per process, not 1,000                      |
+| Eviction      | `maxmemory 256mb`, `volatile-lru`                   | Only keys with a TTL (cache entries) can be evicted, never the Phase 9 queue                     |
+| Redis down    | Treated as a miss; 100 ms timeout; no offline queue | A cache outage makes redirects slightly slower, never failed                                     |
+| Readiness     | Redis is a _non-critical_ check                     | `/ready` stays 200 with `degraded: true`; the load balancer keeps sending traffic                |
+
+**Measured** on one process, 500 links, random access:
+
+|                    | Throughput    | p50    | p99    | Postgres lookups per 2,000 redirects |
+| ------------------ | ------------- | ------ | ------ | ------------------------------------ |
+| Redis cache (warm) | ~12,800 req/s | 1.2 ms | 5.4 ms | **0**                                |
+| PostgreSQL only    | ~7,200 req/s  | 2.5 ms | 7.2 ms | 1,960                                |
+
+Redis stopped and restarted under 8 concurrent clients: **10,662 redirects, all 302**. p50 went from 1.40 ms to 1.66 ms while it was down, and the app reconnected on its own.
 
 ## Reliability: database restarts
 

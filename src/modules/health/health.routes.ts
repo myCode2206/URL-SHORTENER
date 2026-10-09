@@ -6,7 +6,8 @@ import type { HealthService } from './health.service';
 // containers, which only makes an outage worse.
 //
 // GET /ready: readiness. "Should this instance get traffic right now?" Fails
-// when a required dependency is down or the process is shutting down.
+// when a critical dependency is down or the process is shutting down. An
+// optional dependency being down only sets `degraded: true`.
 export function healthRoutes(health: HealthService, version: string): Router {
   const router = Router();
 
@@ -23,6 +24,7 @@ export function healthRoutes(health: HealthService, version: string): Router {
     const report = await health.readiness();
     res.status(report.ready ? 200 : 503).json({
       status: report.ready ? 'ready' : 'not_ready',
+      degraded: report.degraded,
       checks: report.checks,
       timestamp: new Date().toISOString(),
     });

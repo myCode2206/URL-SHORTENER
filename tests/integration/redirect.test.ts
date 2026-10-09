@@ -1,14 +1,22 @@
+import type { Prisma } from '@prisma/client';
 import request from 'supertest';
-import { resetDatabase } from '../helpers/database';
+import { resetState } from '../helpers/database';
 import { buildTestApp } from '../helpers/testApp';
 
-const { app, prisma, clickRecorder } = buildTestApp();
+const { app, prisma, redis, redirectCache, clickRecorder } = buildTestApp();
+
+// Edits a row behind the app's back, then invalidates its cache entry, which
+// every real write path must also do (Phase 7's update endpoints).
+async function updateUrl(shortCode: string, data: Prisma.UrlUpdateInput) {
+  await prisma.url.update({ where: { shortCode }, data });
+  await redirectCache.invalidate(shortCode);
+}
 
 // Write out clicks left over from the previous test before wiping the tables;
 // otherwise they'd land on whichever new URL reuses their ID.
 beforeEach(async () => {
   await clickRecorder.flush();
-  await resetDatabase(prisma);
+  await resetState({ prisma, redis });
 });
 afterAll(() => prisma.$disconnect());
 
@@ -114,10 +122,7 @@ describe('GET /:shortCode', () => {
 
     it('410 URL_EXPIRED once the expiry time has passed', async () => {
       const code = await createShortUrl();
-      await prisma.url.update({
-        where: { shortCode: code },
-        data: { expiresAt: new Date(Date.now() - 1000) },
-      });
+      await updateUrl(code, { expiresAt: new Date(Date.now() - 1000) });
 
       const res = await request(app).get(`/${code}`);
 
@@ -127,16 +132,13 @@ describe('GET /:shortCode', () => {
 
     it('still redirects before the expiry time', async () => {
       const code = await createShortUrl();
-      await prisma.url.update({
-        where: { shortCode: code },
-        data: { expiresAt: new Date(Date.now() + 60_000) },
-      });
+      await updateUrl(code, { expiresAt: new Date(Date.now() + 60_000) });
       expect((await request(app).get(`/${code}`)).status).toBe(302);
     });
 
     it('410 URL_DISABLED when the owner disabled it', async () => {
       const code = await createShortUrl();
-      await prisma.url.update({ where: { shortCode: code }, data: { isActive: false } });
+      await updateUrl(code, { isActive: false });
 
       const res = await request(app).get(`/${code}`);
 
@@ -146,7 +148,7 @@ describe('GET /:shortCode', () => {
 
     it('404 when soft-deleted, indistinguishable from never existing', async () => {
       const code = await createShortUrl();
-      await prisma.url.update({ where: { shortCode: code }, data: { deletedAt: new Date() } });
+      await updateUrl(code, { deletedAt: new Date() });
 
       const res = await request(app).get(`/${code}`);
 
@@ -156,7 +158,7 @@ describe('GET /:shortCode', () => {
 
     it('records no click for expired or disabled links', async () => {
       const code = await createShortUrl();
-      await prisma.url.update({ where: { shortCode: code }, data: { isActive: false } });
+      await updateUrl(code, { isActive: false });
       await request(app).get(`/${code}`);
       await clickRecorder.flush();
       expect(await prisma.click.count()).toBe(0);

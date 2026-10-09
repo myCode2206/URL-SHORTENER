@@ -21,6 +21,12 @@ const envSchema = z.object({
   // Postgres cancels any statement running longer than this, so one runaway
   // query can't hold a pooled connection indefinitely.
   DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  // redis:// locally; rediss:// (TLS) for ElastiCache with encryption in transit.
+  REDIS_URL: z.string().regex(/^rediss?:\/\//, 'must be a redis:// or rediss:// URL'),
+  REDIS_COMMAND_TIMEOUT_MS: z.coerce.number().int().positive().default(100),
+  REDIS_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+  CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  CACHE_NEGATIVE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   // The public origin short links are built on, e.g. https://sho.rt
   BASE_URL: z
     .url({ protocol: /^https?$/ })
@@ -58,6 +64,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       max: vars.DATABASE_POOL_MAX,
       connectTimeoutMs: vars.DATABASE_CONNECT_TIMEOUT_MS,
       statementTimeoutMs: vars.DATABASE_STATEMENT_TIMEOUT_MS,
+    },
+    redis: {
+      url: vars.REDIS_URL,
+      commandTimeoutMs: vars.REDIS_COMMAND_TIMEOUT_MS,
+      connectTimeoutMs: vars.REDIS_CONNECT_TIMEOUT_MS,
+    },
+    cache: {
+      ttlSeconds: vars.CACHE_TTL_SECONDS,
+      negativeTtlSeconds: vars.CACHE_NEGATIVE_TTL_SECONDS,
     },
     baseUrl: vars.BASE_URL,
     shortCodeSecret: vars.SHORT_CODE_SECRET,

@@ -1,18 +1,26 @@
-// A dependency the app cannot serve traffic without (PostgreSQL from Phase 2,
-// Redis from Phase 5). `check` should reject when the dependency is unusable.
+// Something the app depends on. `check` should reject when it is unusable.
+//
+// critical (default true): the app can't serve traffic without it (PostgreSQL),
+// so readiness fails while it's down.
+// critical: false: the app works without it, just slower (Redis). It is reported
+// as down and marks the instance "degraded", but readiness still passes.
 export interface DependencyCheck {
   name: string;
+  critical?: boolean;
   check: () => Promise<void>;
 }
 
 export interface CheckResult {
   status: 'up' | 'down';
+  critical: boolean;
   latencyMs: number;
   error?: string;
 }
 
 export interface ReadinessReport {
   ready: boolean;
+  // True when an optional dependency is down: serving traffic, but not at full speed.
+  degraded: boolean;
   checks: Record<string, CheckResult>;
 }
 
@@ -36,15 +44,22 @@ export class HealthService {
 
   async readiness(): Promise<ReadinessReport> {
     const entries = await Promise.all(
-      this.checks.map(async ({ name, check }) => [name, await runCheck(check)] as const),
+      this.checks.map(
+        async ({ name, check, critical = true }) =>
+          [name, { ...(await runCheck(check)), critical }] as const,
+      ),
     );
-    const checks = Object.fromEntries(entries);
-    const allUp = entries.every(([, result]) => result.status === 'up');
-    return { ready: allUp && !this.shuttingDown, checks };
+    const results = entries.map(([, result]) => result);
+    const criticalUp = results.every((r) => !r.critical || r.status === 'up');
+    return {
+      ready: criticalUp && !this.shuttingDown,
+      degraded: results.some((r) => !r.critical && r.status === 'down'),
+      checks: Object.fromEntries(entries),
+    };
   }
 }
 
-async function runCheck(check: () => Promise<void>): Promise<CheckResult> {
+async function runCheck(check: () => Promise<void>): Promise<Omit<CheckResult, 'critical'>> {
   const started = performance.now();
   let timer: NodeJS.Timeout | undefined;
   // A hung dependency must not hang the readiness probe itself.

@@ -13,12 +13,24 @@ function setup() {
   const repository = {
     create: jest.fn((url: NewUrl) => {
       created.push(url);
-      return Promise.resolve({ ...url, createdAt: new Date('2026-01-01T00:00:00Z') } as Url);
+      return Promise.resolve({
+        ...url,
+        expiresAt: null,
+        isActive: true,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+      } as Url);
     }),
   };
   const codec = createShortCodeCodec('service-test-secret-at-least-32-chars!!');
-  const service = new UrlService({ repository, idGenerator, codec, baseUrl: 'https://sho.rt' });
-  return { service, idGenerator, repository, codec, created };
+  const cache = { set: jest.fn(() => Promise.resolve()) };
+  const service = new UrlService({
+    repository,
+    cache,
+    idGenerator,
+    codec,
+    baseUrl: 'https://sho.rt',
+  });
+  return { service, idGenerator, repository, cache, codec, created };
 }
 
 describe('UrlService.shorten', () => {
@@ -35,6 +47,17 @@ describe('UrlService.shorten', () => {
       shortUrl: `https://sho.rt/${codec.encode(100n)}`,
       originalUrl: 'https://example.com/a',
       createdAt: new Date('2026-01-01T00:00:00Z'),
+    });
+  });
+
+  it('writes the new link to the cache so the first click is a hit', async () => {
+    const { service, cache, codec } = setup();
+    await service.shorten({ url: 'https://example.com/a' });
+    expect(cache.set).toHaveBeenCalledWith(codec.encode(100n), {
+      id: 100n,
+      originalUrl: 'https://example.com/a',
+      expiresAt: null,
+      isActive: true,
     });
   });
 

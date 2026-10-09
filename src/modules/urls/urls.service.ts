@@ -1,5 +1,6 @@
 import type { IdGenerator } from '../../infrastructure/database/idGenerator';
 import { normalizeDestinationUrl } from './destinationUrl';
+import type { RedirectCache } from './redirectCache';
 import type { ShortCodeCodec } from './shortCode';
 import type { UrlRepository } from './urls.repository';
 
@@ -12,6 +13,7 @@ export interface ShortenedUrl {
 
 export interface UrlServiceDependencies {
   repository: Pick<UrlRepository, 'create'>;
+  cache: Pick<RedirectCache, 'set'>;
   idGenerator: IdGenerator;
   codec: ShortCodeCodec;
   baseUrl: string;
@@ -36,6 +38,16 @@ export class UrlService {
     const id = await this.deps.idGenerator.nextId();
     const shortCode = this.deps.codec.encode(id);
     const url = await this.deps.repository.create({ id, shortCode, originalUrl });
+
+    // Write-through: new links are usually shared and clicked right away, so
+    // the first click is a cache hit. It also replaces any cached "doesn't
+    // exist" entry for this code.
+    await this.deps.cache.set(shortCode, {
+      id: url.id,
+      originalUrl: url.originalUrl,
+      expiresAt: url.expiresAt,
+      isActive: url.isActive,
+    });
 
     return {
       shortCode: url.shortCode,
