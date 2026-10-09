@@ -9,8 +9,8 @@ A URL shortener built to production standards with Node.js, TypeScript, Express,
 | 1     | Project setup, TypeScript, Express | ✅ Done |
 | 2     | PostgreSQL and Prisma              | ✅ Done |
 | 3     | URL creation and Base62            | ✅ Done |
-| 4     | Redirects                          | ⏳ Next |
-| 5     | Redis caching                      |         |
+| 4     | Redirects                          | ✅ Done |
+| 5     | Redis caching                      | ⏳ Next |
 | 6     | Authentication                     |         |
 | 7     | URL management                     |         |
 | 8     | Expiration and custom aliases      |         |
@@ -45,6 +45,8 @@ curl -X POST localhost:3000/api/v1/urls \
   -d '{"url": "https://example.com/very/long/url"}'
 ```
 
+Open the `shortUrl` from the response in a browser to be redirected.
+
 Interactive API docs (Swagger UI) are at <http://localhost:3000/docs>, and the raw OpenAPI document is at `/docs/openapi.json`.
 
 ## Scripts
@@ -75,8 +77,10 @@ src/
 ├── docs/openapi.ts        # OpenAPI 3.1 document, built from the Zod schemas
 ├── middleware/            # Request IDs and the central error handler
 ├── modules/
+│   ├── analytics/         # Click events, buffered recorder, batch writer
 │   ├── health/            # Liveness and readiness endpoints
 │   └── urls/              # routes → controller → service → repository
+│       ├── redirect.*         # GET /:shortCode, the hot path
 │       ├── shortCode.ts       # ID → scramble (Feistel) → 7-char Base62
 │       └── destinationUrl.ts  # URL validation and SSRF rules
 ├── container.ts           # Composition root: wires concrete implementations
@@ -131,6 +135,39 @@ POST /api/v1/urls
 - **Not guessable.** Consecutive IDs give unrelated codes, so nobody can walk through every link or tell how many exist without `SHORT_CODE_SECRET`.
 - **Swappable ID source.** `IdGenerator` is an interface. A Snowflake-style or block-reserving generator can replace the Postgres sequence without touching the service.
 - **Capacity.** 62⁷ ≈ 3.5 trillion codes.
+
+## How a redirect works
+
+```text
+GET /Kotrc16
+  → not 7 Base62 characters?    404 immediately, no database query
+  → SELECT id, original_url, expires_at, is_active
+      FROM urls WHERE short_code = $1 AND deleted_at IS NULL   (unique index)
+  → missing or soft-deleted     404 URL_NOT_FOUND
+  → disabled by its owner       410 URL_DISABLED
+  → expires_at <= now           410 URL_EXPIRED
+  → hand the click to an in-memory buffer (never awaited)
+  → 302 Location: <original URL>, Cache-Control: no-store
+
+every second, in the background:
+  buffer → one INSERT of all clicks + one UPDATE of click_count per URL
+```
+
+- **Why 302, not 301?** Browsers cache a 301 permanently, so repeat clicks would never reach the server. They wouldn't be counted, and expiring or disabling a link wouldn't take effect for anyone who had already clicked it.
+- **Clicks never slow a redirect down.** The redirect returns before the click is written. Up to 10,000 clicks wait in memory, and beyond that new clicks are dropped instead of using up memory. Clicks still in the buffer are written on graceful shutdown; Phase 9 moves them to a durable queue.
+- **Browsers get an HTML page** for dead links; API clients get the JSON error format.
+- **Measured, without a cache yet:** 6,373 redirects/s, p50 2.7 ms, p99 8.4 ms, on one process on a laptop.
+
+## Reliability: database restarts
+
+Connections come from a node-postgres pool through Prisma's driver adapter (`@prisma/adapter-pg`), not from Prisma's built-in pool. During a Postgres restart under live traffic (4 concurrent clients, measured):
+
+| Pool                   | Result                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------- |
+| Prisma's built-in pool | Every query failed for ~10 s after the database came back                             |
+| node-postgres pool     | 4,470 × 302 and 149 × 503 during the restart; recovered on the first request after it |
+
+Every failure caused by an outage returns `503` with `Retry-After: 5`, never a `500`.
 
 ## Error format
 

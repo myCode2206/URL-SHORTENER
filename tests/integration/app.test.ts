@@ -103,14 +103,14 @@ describe('request IDs', () => {
 
 describe('error handling', () => {
   it('returns the standard error format for unknown routes', async () => {
-    const res = await request(app()).get('/does-not-exist');
+    const res = await request(app()).get('/does/not/exist');
 
     expect(res.status).toBe(404);
     expect(res.body).toEqual({
       success: false,
       error: {
         code: 'ROUTE_NOT_FOUND',
-        message: 'Cannot GET /does-not-exist',
+        message: 'Cannot GET /does/not/exist',
         requestId: res.headers['x-request-id'],
       },
     });

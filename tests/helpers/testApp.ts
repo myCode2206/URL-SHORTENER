@@ -19,5 +19,5 @@ export function buildTestApp({
   const container = createContainer(config, logger);
   const health = new HealthService(checks);
   const app = createApp({ config, logger, ...container, health });
-  return { app, health, prisma: container.prisma };
+  return { app, health, prisma: container.prisma, clickRecorder: container.clickRecorder };
 }

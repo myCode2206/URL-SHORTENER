@@ -6,8 +6,9 @@ import { createLogger } from './utils/logger';
 const config = loadConfigOrExit();
 const logger = createLogger(config);
 const container = createContainer(config, logger);
-const { prisma, health } = container;
+const { prisma, health, clickRecorder } = container;
 const app = createApp({ config, logger, ...container });
+clickRecorder.start();
 
 // Connect eagerly so a misconfigured DATABASE_URL shows up in the first log
 // lines. A failure is not fatal: Prisma retries on the next query, and /ready
@@ -49,9 +50,11 @@ function shutdown(signal: string): void {
   // Stop accepting connections and wait for in-flight requests to finish.
   server.close((err) => {
     if (err) logger.error({ err }, 'error while closing server');
-    // Only after the last request has finished: release database connections.
-    void prisma
-      .$disconnect()
+    // Only after the last request has finished: write any buffered clicks,
+    // then release database connections.
+    void clickRecorder
+      .stop()
+      .then(() => prisma.$disconnect())
       .catch((disconnectErr: unknown) => logger.error({ err: disconnectErr }, 'disconnect failed'))
       .finally(() => {
         logger.info('shutdown complete');

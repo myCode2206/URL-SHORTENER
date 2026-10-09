@@ -43,7 +43,7 @@ export function buildOpenApiDocument(config: Config) {
         'Shortens URLs into collision-free 7-character codes. All errors share the `ErrorResponse` shape.',
     },
     servers: [{ url: config.baseUrl }],
-    tags: [{ name: 'URLs' }, { name: 'Health' }],
+    tags: [{ name: 'URLs' }, { name: 'Redirect' }, { name: 'Health' }],
     paths: {
       '/api/v1/urls': {
         post: {
@@ -77,6 +77,36 @@ export function buildOpenApiDocument(config: Config) {
               'Body larger than 10kb',
               'PAYLOAD_TOO_LARGE',
               'Request body is too large',
+            ),
+            503: serviceUnavailable,
+          },
+        },
+      },
+      '/{shortCode}': {
+        get: {
+          tags: ['Redirect'],
+          summary: 'Follow a short link',
+          description:
+            'Redirects to the original URL with 302 and `Cache-Control: no-store`, so every click reaches the server and is counted. Clicks are recorded asynchronously and never delay the redirect. HEAD requests redirect without counting a click. Browsers (Accept: text/html) get an HTML error page instead of JSON.',
+          parameters: [
+            {
+              name: 'shortCode',
+              in: 'path',
+              required: true,
+              schema: { type: 'string', pattern: '^[0-9a-zA-Z]{7}$' },
+              example: 'aB7xK2q',
+            },
+          ],
+          responses: {
+            302: {
+              description: 'Redirect to the original URL (in the Location header)',
+              headers: { Location: { schema: { type: 'string', format: 'uri' } } },
+            },
+            404: errorResponse('No such short URL', 'URL_NOT_FOUND', 'Short URL does not exist'),
+            410: errorResponse(
+              'The short URL expired (URL_EXPIRED) or was disabled by its owner (URL_DISABLED)',
+              'URL_EXPIRED',
+              'This short URL has expired',
             ),
             503: serviceUnavailable,
           },

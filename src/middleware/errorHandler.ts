@@ -17,6 +17,16 @@ export const errorHandler: ErrorRequestHandler = (err: unknown, req, res, next) 
   if (appError.statusCode >= 500 && err instanceof Error) res.err = err;
   // Tells well-behaved clients the outage is temporary and when to try again.
   if (appError.statusCode === 503) res.set('Retry-After', '5');
+  // Errors are never cached. CloudFront, for one, caches 4xx responses for 10s
+  // by default: a 404 for a link created a moment later would stick around.
+  res.set('Cache-Control', 'no-store');
+
+  // Someone clicking a dead short link in a browser gets a readable page;
+  // API clients (and anything not asking for HTML) get JSON.
+  if (!req.path.startsWith('/api/') && req.accepts(['json', 'html']) === 'html') {
+    res.status(appError.statusCode).type('html').send(renderErrorPage(appError, req.id));
+    return;
+  }
 
   res.status(appError.statusCode).json({
     success: false,
@@ -63,4 +73,39 @@ export function toAppError(err: unknown): AppError {
 
 function isBodyParserError(err: unknown): err is Error & { type: string } {
   return err instanceof Error && typeof (err as { type?: unknown }).type === 'string';
+}
+
+const PAGE_TITLES: Record<number, string> = {
+  404: 'Link not found',
+  410: 'This link is no longer available',
+  503: 'Temporarily unavailable',
+};
+
+function renderErrorPage(error: AppError, requestId: unknown): string {
+  const title = PAGE_TITLES[error.statusCode] ?? 'Something went wrong';
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${escapeHtml(title)}</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 15vh auto; padding: 0 1rem; color: #222; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #eee; background: #111; } }
+  small { color: #888; }
+</style>
+</head>
+<body>
+<h1>${escapeHtml(title)}</h1>
+<p>${escapeHtml(error.message)}</p>
+<small>Error ${error.statusCode} · ${escapeHtml(error.code)} · request ${escapeHtml(String(requestId))}</small>
+</body>
+</html>`;
+}
+
+// Messages are fixed strings today, but escaping is applied anyway so that a
+// future message containing user input can't become an XSS hole.
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }

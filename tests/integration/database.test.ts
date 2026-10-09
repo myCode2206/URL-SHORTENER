@@ -116,7 +116,7 @@ describe('foreign keys', () => {
 describe('indexes', () => {
   it('has an index behind every hot query', async () => {
     const rows = await prisma.$queryRaw<{ indexname: string; indexdef: string }[]>`
-      SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname`;
+      SELECT indexname::text, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname`;
     const defs = Object.fromEntries(rows.map((r) => [r.indexname, r.indexdef]));
 
     expect(defs.urls_short_code_key).toContain('UNIQUE INDEX');

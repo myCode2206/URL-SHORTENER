@@ -7,6 +7,8 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { resolveRequestId } from './middleware/requestId';
 import type { HealthService } from './modules/health/health.service';
 import { healthRoutes } from './modules/health/health.routes';
+import type { RedirectController } from './modules/urls/redirect.controller';
+import { redirectRoutes } from './modules/urls/redirect.routes';
 import type { UrlController } from './modules/urls/urls.controller';
 import { urlRoutes } from './modules/urls/urls.routes';
 import type { Logger } from './utils/logger';
@@ -16,11 +18,18 @@ export interface AppDependencies {
   logger: Logger;
   health: HealthService;
   urlController: UrlController;
+  redirectController: RedirectController;
 }
 
 // Builds the Express app without starting a server. Tests use this to run
 // requests in memory with fake dependencies; server.ts adds the real ones.
-export function createApp({ config, logger, health, urlController }: AppDependencies): Express {
+export function createApp({
+  config,
+  logger,
+  health,
+  urlController,
+  redirectController,
+}: AppDependencies): Express {
   const app = express();
 
   app.disable('x-powered-by');
@@ -49,6 +58,8 @@ export function createApp({ config, logger, health, urlController }: AppDependen
   app.use('/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument));
 
   app.use('/api/v1/urls', urlRoutes(urlController));
+  // Must stay last: /:shortCode matches any single path segment.
+  app.use(redirectRoutes(redirectController));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

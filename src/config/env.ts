@@ -13,6 +13,14 @@ const envSchema = z.object({
   DATABASE_URL: z
     .string()
     .regex(/^postgres(ql)?:\/\//, 'must be a postgresql:// connection string'),
+  // Connections this process keeps open. Across all instances the total must
+  // stay under the database's max_connections (see README: pooling).
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+  // How long a request waits to open a connection or borrow one from the pool.
+  DATABASE_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  // Postgres cancels any statement running longer than this, so one runaway
+  // query can't hold a pooled connection indefinitely.
+  DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   // The public origin short links are built on, e.g. https://sho.rt
   BASE_URL: z
     .url({ protocol: /^https?$/ })
@@ -46,6 +54,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     shutdownTimeoutMs: vars.SHUTDOWN_TIMEOUT_MS,
     version: vars.APP_VERSION,
     databaseUrl: vars.DATABASE_URL,
+    databasePool: {
+      max: vars.DATABASE_POOL_MAX,
+      connectTimeoutMs: vars.DATABASE_CONNECT_TIMEOUT_MS,
+      statementTimeoutMs: vars.DATABASE_STATEMENT_TIMEOUT_MS,
+    },
     baseUrl: vars.BASE_URL,
     shortCodeSecret: vars.SHORT_CODE_SECRET,
   } as const;
