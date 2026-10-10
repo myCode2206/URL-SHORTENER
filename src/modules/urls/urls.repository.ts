@@ -8,7 +8,13 @@ export interface NewUrl {
   originalUrl: string;
   // null for links created anonymously.
   userId: string | null;
+  customAlias: string | null;
+  expiresAt: Date | null;
 }
+
+// A redirect is looked up by generated code or by alias, never both. Which one
+// a path is follows from its shape (see redirect.service.ts).
+export type RedirectLookup = { shortCode: string } | { customAlias: string };
 
 // Everything a redirect needs, and nothing more. Phase 5 caches exactly this
 // shape in Redis, so it is kept small.
@@ -88,14 +94,17 @@ export class UrlRepository {
     return this.db.url.create({ data: url });
   }
 
-  // One lookup on the unique short_code index. Soft-deleted URLs are filtered
-  // out here, so to the redirect path they are indistinguishable from codes
-  // that never existed.
-  findRedirectTarget(shortCode: string): Promise<RedirectTarget | null> {
-    return this.db.url.findUnique({
-      where: { shortCode, deletedAt: null },
-      select: { id: true, originalUrl: true, expiresAt: true, isActive: true },
-    });
+  // Soft-deleted URLs are filtered out here, so to the redirect path they are
+  // indistinguishable from codes that never existed.
+  // Either way it's one unique-index lookup: short_code or custom_alias.
+  findRedirectTarget(lookup: RedirectLookup): Promise<RedirectTarget | null> {
+    const select = { id: true, originalUrl: true, expiresAt: true, isActive: true } as const;
+    return 'shortCode' in lookup
+      ? this.db.url.findUnique({ where: { shortCode: lookup.shortCode, deletedAt: null }, select })
+      : this.db.url.findUnique({
+          where: { customAlias: lookup.customAlias, deletedAt: null },
+          select,
+        });
   }
 
   // Ownership is part of every query below (WHERE user_id = ...), not a
@@ -129,12 +138,22 @@ export class UrlRepository {
   }
 
   // Soft delete: the row (and its alias) stays reserved forever; see schema.prisma.
-  async softDeleteOwned(userId: string, shortCode: string): Promise<boolean> {
-    const { count } = await this.db.url.updateMany({
-      where: { shortCode, userId, deletedAt: null },
-      data: { deletedAt: new Date() },
-    });
-    return count > 0;
+  // Returns the deleted link's paths (code and alias) so the caller can clear
+  // both from the cache, or null if the user had no such live link.
+  async softDeleteOwned(
+    userId: string,
+    shortCode: string,
+  ): Promise<{ shortCode: string; customAlias: string | null } | null> {
+    try {
+      return await this.db.url.update({
+        where: { shortCode, userId, deletedAt: null },
+        data: { deletedAt: new Date() },
+        select: { shortCode: true, customAlias: true },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') return null;
+      throw err;
+    }
   }
 
   // One page of a user's links, using keyset ("cursor") pagination.

@@ -224,7 +224,7 @@ export function buildOpenApiDocument(config: Config) {
           security: [{}, { bearerAuth: [] }],
           summary: 'Shorten a URL',
           description:
-            'Only public http(s) URLs are accepted: no localhost, private or link-local IPs, embedded credentials, or links to this service.',
+            'Only public http(s) URLs are accepted: no localhost, private or link-local IPs, embedded credentials, or links to this service. `customAlias` needs a signed-in user (401 otherwise); `expiresAt` is open to everyone.',
           requestBody: {
             required: true,
             content: { 'application/json': { schema: ref('CreateUrlRequest') } },
@@ -243,8 +243,13 @@ export function buildOpenApiDocument(config: Config) {
               },
             },
             401: unauthorized,
+            409: errorResponse(
+              'Alias already taken (including by a deleted link)',
+              'ALIAS_TAKEN',
+              'This alias is already taken',
+            ),
             400: errorResponse(
-              'Malformed JSON, schema violation (VALIDATION_ERROR) or a URL that is not allowed (INVALID_URL)',
+              'Malformed JSON or schema violation (VALIDATION_ERROR), a URL that is not allowed (INVALID_URL), a malformed alias (INVALID_ALIAS), a reserved or brand alias (ALIAS_NOT_ALLOWED), or a bad expiry (INVALID_EXPIRY)',
               'INVALID_URL',
               'URLs pointing to private or internal networks are not allowed',
             ),
@@ -296,19 +301,21 @@ export function buildOpenApiDocument(config: Config) {
           responses: { 204: { description: 'Deleted' }, 401: unauthorized, 404: notOwned },
         },
       },
-      '/{shortCode}': {
+      '/{code}': {
         get: {
           tags: ['Redirect'],
-          summary: 'Follow a short link',
+          summary: 'Follow a short link (generated code or custom alias)',
           description:
             'Redirects to the original URL with 302 and `Cache-Control: no-store`, so every click reaches the server and is counted. Clicks are recorded asynchronously and never delay the redirect. HEAD requests redirect without counting a click. Browsers (Accept: text/html) get an HTML error page instead of JSON.',
           parameters: [
             {
-              name: 'shortCode',
+              name: 'code',
               in: 'path',
               required: true,
-              schema: { type: 'string', pattern: '^[0-9a-zA-Z]{7}$' },
-              example: 'aB7xK2q',
+              description:
+                'A 7-character generated code (case-sensitive) or a custom alias (case-insensitive)',
+              schema: { type: 'string' },
+              example: 'my-profile',
             },
           ],
           responses: {

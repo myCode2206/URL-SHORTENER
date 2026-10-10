@@ -1,5 +1,6 @@
 import { AppError } from '../../utils/errors';
 import { decodeCursor, encodeCursor, type SortField, type SortOrder } from './cursor';
+import { validateExpiry } from './expiry';
 import { availabilityOf } from './redirect.service';
 import type { RedirectCache } from './redirectCache';
 import type { OwnedUrl, UrlChanges, UrlRepository, UrlStatus } from './urls.repository';
@@ -86,23 +87,33 @@ export class UrlManagementService {
 
   async update(userId: string, shortCode: string, changes: UrlChanges): Promise<UrlView> {
     const now = this.now();
-    if (changes.expiresAt && changes.expiresAt.getTime() <= now.getTime()) {
-      throw new AppError(400, 'INVALID_EXPIRY', 'expiresAt must be in the future');
-    }
+    if (changes.expiresAt) validateExpiry(changes.expiresAt, now);
 
     const url = await this.deps.repository.updateOwned(userId, shortCode, changes);
     if (!url) throw notFound();
 
-    // Overwrite the cached entry with the new state, so disabling a link stops
-    // redirects at once instead of when the cache entry expires.
-    await this.deps.cache.set(shortCode, url);
+    // Overwrite the cached entries with the new state, so disabling a link
+    // stops redirects at once instead of when the cache entry expires.
+    await this.cacheEverywhere(url, url);
     return this.view(url, now);
   }
 
   async remove(userId: string, shortCode: string): Promise<void> {
-    if (!(await this.deps.repository.softDeleteOwned(userId, shortCode))) throw notFound();
+    const deleted = await this.deps.repository.softDeleteOwned(userId, shortCode);
+    if (!deleted) throw notFound();
     // Cache "doesn't exist", so redirects return 404 immediately.
-    await this.deps.cache.set(shortCode, null);
+    await this.cacheEverywhere(deleted, null);
+  }
+
+  // A link is reachable by its code and, if it has one, its alias. Both cache
+  // entries must change together, or disabling an aliased link would leave the
+  // alias redirecting from cache.
+  private async cacheEverywhere(
+    paths: { shortCode: string; customAlias: string | null },
+    state: OwnedUrl | null,
+  ): Promise<void> {
+    const keys = [paths.shortCode, paths.customAlias].filter((k): k is string => k !== null);
+    await Promise.all(keys.map((key) => this.deps.cache.set(key, state)));
   }
 
   private view(url: OwnedUrl, now: Date): UrlView {

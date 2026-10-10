@@ -30,12 +30,12 @@ function setup(rows: OwnedUrl[] = []) {
       const row = userId === USER ? rows.find((r) => r.shortCode === code) : undefined;
       return row ? { ...row, ...changes } : null;
     }),
-    softDeleteOwned: jest.fn(
-      async (userId: string, code: string) =>
-        userId === USER && rows.some((r) => r.shortCode === code),
-    ),
+    softDeleteOwned: jest.fn(async (userId: string, code: string) => {
+      const row = userId === USER ? rows.find((r) => r.shortCode === code) : undefined;
+      return row ? { shortCode: row.shortCode, customAlias: row.customAlias } : null;
+    }),
   };
-  const cache = { set: jest.fn(async () => {}) };
+  const cache = { set: jest.fn(async (_key: string, _state: OwnedUrl | null) => {}) };
   const service = new UrlManagementService({
     repository,
     cache,
@@ -160,5 +160,23 @@ describe('remove', () => {
     const { service, cache } = setup([owned()]);
     await service.remove(USER, 'aB7xK2q');
     expect(cache.set).toHaveBeenCalledWith('aB7xK2q', null);
+  });
+});
+
+describe('links with an alias have two cache entries, changed together', () => {
+  it('update writes the new state under both the code and the alias', async () => {
+    const { service, cache } = setup([owned({ customAlias: 'my-profile' })]);
+    await service.update(USER, 'aB7xK2q', { isActive: false });
+
+    const keys = cache.set.mock.calls.map(([key]) => key);
+    expect(keys.sort()).toEqual(['aB7xK2q', 'my-profile']);
+  });
+
+  it('remove marks both paths as gone', async () => {
+    const { service, cache } = setup([owned({ customAlias: 'my-profile' })]);
+    await service.remove(USER, 'aB7xK2q');
+
+    expect(cache.set).toHaveBeenCalledWith('aB7xK2q', null);
+    expect(cache.set).toHaveBeenCalledWith('my-profile', null);
   });
 });

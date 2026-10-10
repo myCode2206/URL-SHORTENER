@@ -25,6 +25,8 @@ describe('POST /api/v1/urls', () => {
         shortCode: expect.stringMatching(/^[0-9a-zA-Z]{7}$/),
         shortUrl: `http://short.test/${res.body.data.shortCode}`,
         originalUrl: 'https://example.com/very/long/url?ref=1',
+        customAlias: null,
+        expiresAt: null,
         createdAt: expect.any(String),
       },
     });

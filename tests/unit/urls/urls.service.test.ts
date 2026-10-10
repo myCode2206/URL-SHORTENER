@@ -1,4 +1,4 @@
-import type { Url } from '@prisma/client';
+import { Prisma, type Url } from '@prisma/client';
 import { createShortCodeCodec } from '../../../src/modules/urls/shortCode';
 import type { NewUrl } from '../../../src/modules/urls/urls.repository';
 import { UrlService } from '../../../src/modules/urls/urls.service';
@@ -14,9 +14,8 @@ function setup() {
     create: jest.fn((url: NewUrl) => {
       created.push(url);
       return Promise.resolve({
-        ...url,
-        expiresAt: null,
         isActive: true,
+        ...url,
         createdAt: new Date('2026-01-01T00:00:00Z'),
       } as Url);
     }),
@@ -45,12 +44,16 @@ describe('UrlService.shorten', () => {
         shortCode: codec.encode(100n),
         originalUrl: 'https://example.com/a',
         userId: null,
+        customAlias: null,
+        expiresAt: null,
       },
     ]);
     expect(result).toEqual({
       shortCode: codec.encode(100n),
       shortUrl: `https://sho.rt/${codec.encode(100n)}`,
       originalUrl: 'https://example.com/a',
+      customAlias: null,
+      expiresAt: null,
       createdAt: new Date('2026-01-01T00:00:00Z'),
     });
   });
@@ -94,5 +97,86 @@ describe('UrlService.shorten', () => {
     await expect(service.shorten({ url: 'https://sho.rt/abc1234' }, null)).rejects.toMatchObject({
       code: 'INVALID_URL',
     });
+  });
+});
+
+describe('UrlService.shorten with a custom alias and expiry', () => {
+  const NOW = new Date('2026-06-01T12:00:00Z');
+
+  it('stores the normalised alias and returns a short URL that uses it', async () => {
+    const { service, created } = setup();
+
+    const result = await service.shorten(
+      { url: 'https://example.com', customAlias: 'My-Profile' },
+      'u1',
+    );
+
+    expect(created[0]?.customAlias).toBe('my-profile');
+    expect(result.shortUrl).toBe('https://sho.rt/my-profile');
+    expect(result.customAlias).toBe('my-profile');
+  });
+
+  it('writes the cache under both the code and the alias', async () => {
+    const { service, cache, codec } = setup();
+    await service.shorten({ url: 'https://example.com', customAlias: 'my-profile' }, 'u1');
+
+    const keys = cache.set.mock.calls.map((call) => (call as unknown[])[0]);
+    expect(keys.sort()).toEqual([codec.encode(100n), 'my-profile'].sort());
+  });
+
+  it('requires a signed-in user for an alias, before reserving an ID', async () => {
+    const { service, idGenerator } = setup();
+
+    await expect(
+      service.shorten({ url: 'https://example.com', customAlias: 'my-profile' }, null),
+    ).rejects.toMatchObject({ statusCode: 401, code: 'AUTH_REQUIRED' });
+    expect(idGenerator.nextId).not.toHaveBeenCalled();
+  });
+
+  it('rejects a bad alias before reserving an ID', async () => {
+    const { service, idGenerator } = setup();
+    await expect(
+      service.shorten({ url: 'https://example.com', customAlias: 'paypal-login' }, 'u1'),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(idGenerator.nextId).not.toHaveBeenCalled();
+  });
+
+  it('turns a unique violation on the alias into 409 ALIAS_TAKEN', async () => {
+    const { service, repository } = setup();
+    repository.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { modelName: 'Url', target: ['custom_alias'] },
+      }),
+    );
+
+    await expect(
+      service.shorten({ url: 'https://example.com', customAlias: 'my-profile' }, 'u1'),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'ALIAS_TAKEN' });
+  });
+
+  it('does not disguise other unique violations as a taken alias', async () => {
+    const { service, repository } = setup();
+    const collision = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { modelName: 'Url', target: ['short_code'] },
+    });
+    repository.create.mockRejectedValueOnce(collision);
+
+    await expect(service.shorten({ url: 'https://example.com' }, 'u1')).rejects.toBe(collision);
+  });
+
+  it('stores an expiry and validates it with the shared rule', async () => {
+    const { service, created } = setup();
+    const expiresAt = new Date(Date.now() + 86_400_000);
+
+    await service.shorten({ url: 'https://example.com', expiresAt }, null);
+    expect(created[0]?.expiresAt).toEqual(expiresAt);
+
+    await expect(
+      service.shorten({ url: 'https://example.com', expiresAt: new Date(NOW.getTime() - 1) }, null),
+    ).rejects.toMatchObject({ code: 'INVALID_EXPIRY' });
   });
 });

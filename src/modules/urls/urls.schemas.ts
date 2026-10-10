@@ -12,14 +12,35 @@ export const createUrlBody = z.strictObject({
     description: 'The http(s) URL to shorten',
     example: 'https://example.com/very/long/url',
   }),
+  // Shape only here; the full rules (format, reserved words, brands) live in
+  // alias.ts and return specific error codes.
+  customAlias: z.string().max(64).optional().meta({
+    description:
+      'Signed-in users only. 4–32 lowercase letters, digits and single hyphens; case-insensitive; not exactly 7 letters/digits; no reserved words or brand names.',
+    example: 'my-profile',
+  }),
+  expiresAt: z.iso
+    .datetime({ offset: true })
+    .transform((value) => new Date(value))
+    .optional()
+    .meta({
+      description:
+        'When the link stops redirecting (410 Gone). Must be in the future, within 10 years.',
+      example: '2027-01-01T00:00:00Z',
+    }),
 });
 
 export type CreateUrlBody = z.infer<typeof createUrlBody>;
 
 export const shortenedUrl = z.object({
   shortCode: z.string().meta({ example: 'aB7xK2q' }),
-  shortUrl: z.url().meta({ example: 'https://sho.rt/aB7xK2q' }),
+  shortUrl: z.url().meta({
+    description: 'Uses the alias when there is one',
+    example: 'https://sho.rt/my-profile',
+  }),
   originalUrl: z.url().meta({ example: 'https://example.com/very/long/url' }),
+  customAlias: z.string().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
 });
 

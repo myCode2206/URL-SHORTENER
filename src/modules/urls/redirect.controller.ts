@@ -4,8 +4,8 @@ import type { RedirectService } from './redirect.service';
 export class RedirectController {
   constructor(private readonly service: RedirectService) {}
 
-  redirect = async (req: Request<{ shortCode: string }>, res: Response): Promise<void> => {
-    const destination = await this.service.resolve(req.params.shortCode, {
+  redirect = async (req: Request<{ code: string }>, res: Response): Promise<void> => {
+    const destination = await this.service.resolve(req.params.code, {
       userAgent: req.get('user-agent') ?? null,
       referrer: req.get('referer') ?? null,
       countsAsClick: req.method === 'GET',

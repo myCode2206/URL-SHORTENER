@@ -1,5 +1,9 @@
 import type { ClickEvent } from '../../../src/modules/analytics/clickEvent';
-import { availabilityOf, RedirectService } from '../../../src/modules/urls/redirect.service';
+import {
+  availabilityOf,
+  parseRedirectPath,
+  RedirectService,
+} from '../../../src/modules/urls/redirect.service';
 import type { CacheLookup } from '../../../src/modules/urls/redirectCache';
 import type { RedirectTarget } from '../../../src/modules/urls/urls.repository';
 
@@ -72,7 +76,7 @@ describe('RedirectService.resolve', () => {
     expect(clickRecorder.record).not.toHaveBeenCalled();
   });
 
-  it.each(['', 'abc', 'favicon.ico', 'wp-login.php', 'aB7xK2q8', 'aB7-K2q'])(
+  it.each(['', 'abc', 'favicon.ico', 'wp-login.php', '-leading', 'double--hyphen', 'x'.repeat(33)])(
     'rejects malformed code %j with 404 without querying the database',
     async (code) => {
       const { service, repository } = setup();
@@ -136,7 +140,7 @@ describe('RedirectService caching (cache-aside)', () => {
 
     await service.resolve('aB7xK2q', visit);
 
-    expect(repository.findRedirectTarget).toHaveBeenCalledWith('aB7xK2q');
+    expect(repository.findRedirectTarget).toHaveBeenCalledWith({ shortCode: 'aB7xK2q' });
     expect(cache.fill).toHaveBeenCalledWith('aB7xK2q', target());
   });
 
@@ -167,5 +171,31 @@ describe('RedirectService caching (cache-aside)', () => {
     const { service, cache } = setup(target());
     cache.fill.mockReturnValue(new Promise(() => {})); // a write that never finishes
     await expect(service.resolve('aB7xK2q', visit)).resolves.toBe('https://example.com/');
+  });
+});
+
+describe('parseRedirectPath: one URL space for codes and aliases', () => {
+  it.each([
+    ['aB7xK2q', { cacheKey: 'aB7xK2q', lookup: { shortCode: 'aB7xK2q' } }],
+    // A generated code is case-sensitive: this is a different code, not an alias.
+    ['AB7XK2Q', { cacheKey: 'AB7XK2Q', lookup: { shortCode: 'AB7XK2Q' } }],
+    ['my-profile', { cacheKey: 'my-profile', lookup: { customAlias: 'my-profile' } }],
+    // Aliases are case-insensitive.
+    ['My-Profile', { cacheKey: 'my-profile', lookup: { customAlias: 'my-profile' } }],
+    ['my-page', { cacheKey: 'my-page', lookup: { customAlias: 'my-page' } }],
+    ['aB7xK2q8', { cacheKey: 'ab7xk2q8', lookup: { customAlias: 'ab7xk2q8' } }],
+  ])('%s → %j', (path, expected) => {
+    expect(parseRedirectPath(path)).toEqual(expected);
+  });
+
+  it.each(['abc', 'favicon.ico', 'my_profile', 'café-menu', '-x-'])('%s can be neither', (path) => {
+    expect(parseRedirectPath(path)).toBeNull();
+  });
+
+  it('looks an alias up by alias, and caches it under its lowercase form', async () => {
+    const { service, repository, cache } = setup(target());
+    await service.resolve('My-Profile', { userAgent: null, referrer: null, countsAsClick: true });
+    expect(cache.get).toHaveBeenCalledWith('my-profile');
+    expect(repository.findRedirectTarget).toHaveBeenCalledWith({ customAlias: 'my-profile' });
   });
 });

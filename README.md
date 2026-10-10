@@ -13,8 +13,8 @@ A URL shortener built to production standards with Node.js, TypeScript, Express,
 | 5     | Redis caching                      | ✅ Done |
 | 6     | Authentication                     | ✅ Done |
 | 7     | URL management                     | ✅ Done |
-| 8     | Expiration and custom aliases      | ⏳ Next |
-| 9     | Analytics                          |         |
+| 8     | Expiration and custom aliases      | ✅ Done |
+| 9     | Analytics                          | ⏳ Next |
 | 10    | Rate limiting and security         |         |
 | 11    | Testing                            |         |
 | 12    | Docker                             |         |
@@ -84,7 +84,9 @@ src/
 │   ├── users/             # GET /api/v1/users/me
 │   ├── health/            # Liveness and readiness endpoints
 │   └── urls/              # routes → controller → service → repository
-│       ├── redirect.*         # GET /:shortCode, the hot path
+│       ├── redirect.*         # GET /:code, the hot path (code or alias)
+│       ├── alias.ts           # Custom alias rules
+│       ├── expiry.ts          # Expiry rule shared by create and PATCH
 │       ├── redirectCache.ts   # Redis cache-aside for redirect targets (fill vs set)
 │       ├── urlManagement.service.ts  # List, get, update, delete your links
 │       ├── cursor.ts          # Opaque keyset-pagination cursors
@@ -190,6 +192,30 @@ refresh with A again ──► A was already used: a copy exists (theft or repla
 - **Cookie:** `HttpOnly` (JavaScript can't read it), `SameSite=Strict` (CSRF), `Path=/api/v1/auth`, and `Secure` in production.
 - **No account enumeration:** a wrong password and an unknown email get the same error and take about the same time.
 - **Ownership:** `POST /api/v1/urls` with a token records the user as the link's owner; without one, the link is anonymous.
+
+## Custom aliases and expiry
+
+```bash
+curl -X POST localhost:3000/api/v1/urls \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"url": "https://example.com", "customAlias": "my-profile", "expiresAt": "2027-01-01T00:00:00Z"}'
+# → "shortUrl": "http://localhost:3000/my-profile"
+```
+
+**One URL space, no collisions.** A path of exactly 7 letters and digits is always a generated code, and anything else is an alias. So aliases may never have that shape (`launch1` is rejected; `launch-1` is fine). The redirect path decides which lookup to run from the shape alone.
+
+| Rule                                                                        | Why                                                                                        |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Signed-in users only                                                        | An anonymous alias could never be managed, and would occupy the name forever               |
+| 4–32 characters: lowercase `a-z`, `0-9`, single hyphens                     | Readable, URL-safe; ASCII-only rules out look-alike Unicode (`pаypal` with a Cyrillic `а`) |
+| Case-insensitive                                                            | `My-Profile` and `my-profile` can't belong to different people                             |
+| Reserved words (`docs`, `health`, `admin`, `login`, …)                      | They'd collide with routes, or look like part of the site                                  |
+| No brand names or sign-in words as a word (`paypal-help`, `verify-account`) | Phishing links would carry this domain's reputation                                        |
+| `409 ALIAS_TAKEN`                                                           | Decided by the unique index, so simultaneous claims can't both win                         |
+| Deleted links keep their alias                                              | Otherwise someone else could claim it and take over every place it was shared              |
+| Database `CHECK` constraint                                                 | A malformed alias can't be stored, even by code that skips the app's checks                |
+
+**Expiry** (`expiresAt`, open to everyone) must be in the future and within 10 years. Creation and `PATCH` use the same rule. An expired link answers `410 Gone` at exactly the right moment, even while it's still cached, because expiry is checked on every request.
 
 ## Managing your links
 
