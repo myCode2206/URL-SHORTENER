@@ -1,16 +1,20 @@
-import express, { type Express } from 'express';
+import express, { type Express, type RequestHandler } from 'express';
 import { pinoHttp } from 'pino-http';
 import swaggerUi from 'swagger-ui-express';
 import type { Config } from './config/env';
 import { buildOpenApiDocument } from './docs/openapi';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { resolveRequestId } from './middleware/requestId';
+import type { AuthController } from './modules/auth/auth.controller';
+import { authRoutes } from './modules/auth/auth.routes';
 import type { HealthService } from './modules/health/health.service';
 import { healthRoutes } from './modules/health/health.routes';
 import type { RedirectController } from './modules/urls/redirect.controller';
 import { redirectRoutes } from './modules/urls/redirect.routes';
 import type { UrlController } from './modules/urls/urls.controller';
 import { urlRoutes } from './modules/urls/urls.routes';
+import type { UsersController } from './modules/users/users.controller';
+import { usersRoutes } from './modules/users/users.routes';
 import type { Logger } from './utils/logger';
 
 export interface AppDependencies {
@@ -19,6 +23,10 @@ export interface AppDependencies {
   health: HealthService;
   urlController: UrlController;
   redirectController: RedirectController;
+  authController: AuthController;
+  usersController: UsersController;
+  requireAuth: RequestHandler;
+  optionalAuth: RequestHandler;
 }
 
 // Builds the Express app without starting a server. Tests use this to run
@@ -29,6 +37,10 @@ export function createApp({
   health,
   urlController,
   redirectController,
+  authController,
+  usersController,
+  requireAuth,
+  optionalAuth,
 }: AppDependencies): Express {
   const app = express();
 
@@ -57,7 +69,9 @@ export function createApp({
   });
   app.use('/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument));
 
-  app.use('/api/v1/urls', urlRoutes(urlController));
+  app.use('/api/v1/auth', authRoutes(authController));
+  app.use('/api/v1/users', usersRoutes(usersController, requireAuth));
+  app.use('/api/v1/urls', urlRoutes(urlController, optionalAuth));
   // Must stay last: /:shortCode matches any single path segment.
   app.use(redirectRoutes(redirectController));
 

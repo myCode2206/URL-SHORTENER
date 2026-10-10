@@ -10,7 +10,7 @@ export class UrlController {
   create = async (req: Request, res: Response): Promise<void> => {
     // A ZodError thrown here becomes a 400 VALIDATION_ERROR in the error handler.
     const body = createUrlBody.parse(req.body);
-    const url = await this.service.shorten(body);
+    const url = await this.service.shorten(body, req.auth?.userId ?? null);
     res.status(201).json({ success: true, data: url });
   };
 }

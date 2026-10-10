@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Config } from '../config/env';
+import { loginBody, publicUser, registerBody, sessionResponse } from '../modules/auth/auth.schemas';
 import { createUrlBody, shortenedUrl } from '../modules/urls/urls.schemas';
 
 type JsonSchema = Record<string, unknown>;
@@ -33,6 +34,34 @@ const serviceUnavailable = errorResponse(
   'Service is temporarily unavailable',
 );
 
+const envelope = (schemaName: string) => ({
+  type: 'object',
+  properties: { success: { const: true }, data: ref(schemaName) },
+  required: ['success', 'data'],
+});
+
+const jsonContent = (schema: object) => ({ 'application/json': { schema } });
+
+const unauthorized = errorResponse(
+  'Missing, malformed or expired access token (AUTH_REQUIRED, INVALID_TOKEN, TOKEN_EXPIRED)',
+  'TOKEN_EXPIRED',
+  'Access token has expired; refresh it',
+);
+
+const refreshCookieHeader = {
+  'Set-Cookie': {
+    description:
+      'refresh_token: HttpOnly; SameSite=Strict; Path=/api/v1/auth; Secure in production. Never readable by JavaScript.',
+    schema: { type: 'string' },
+  },
+};
+
+const sessionOk = (status: string) => ({
+  description: `${status}. The access token is in the body; the refresh token is set as a cookie.`,
+  headers: refreshCookieHeader,
+  content: jsonContent(envelope('Session')),
+});
+
 export function buildOpenApiDocument(config: Config) {
   return {
     openapi: '3.1.0',
@@ -43,11 +72,102 @@ export function buildOpenApiDocument(config: Config) {
         'Shortens URLs into collision-free 7-character codes. All errors share the `ErrorResponse` shape.',
     },
     servers: [{ url: config.baseUrl }],
-    tags: [{ name: 'URLs' }, { name: 'Redirect' }, { name: 'Health' }],
+    tags: [
+      { name: 'Auth' },
+      { name: 'Users' },
+      { name: 'URLs' },
+      { name: 'Redirect' },
+      { name: 'Health' },
+    ],
     paths: {
+      '/api/v1/auth/register': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Create an account and start a session',
+          description:
+            'Password: 12–128 characters, no composition rules. Stored as an Argon2id hash.',
+          requestBody: { required: true, content: jsonContent(ref('RegisterRequest')) },
+          responses: {
+            201: sessionOk('Account created'),
+            400: errorResponse(
+              'Invalid email or password too short',
+              'VALIDATION_ERROR',
+              'Request validation failed',
+            ),
+            409: errorResponse(
+              'Email already registered',
+              'EMAIL_TAKEN',
+              'An account with this email already exists',
+            ),
+            503: serviceUnavailable,
+          },
+        },
+      },
+      '/api/v1/auth/login': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Log in and start a session',
+          requestBody: { required: true, content: jsonContent(ref('LoginRequest')) },
+          responses: {
+            200: sessionOk('Logged in'),
+            401: errorResponse(
+              'Wrong email or password. Deliberately the same answer for both.',
+              'INVALID_CREDENTIALS',
+              'Email or password is incorrect',
+            ),
+            503: serviceUnavailable,
+          },
+        },
+      },
+      '/api/v1/auth/refresh': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Get a new access token using the refresh-token cookie',
+          description:
+            'Rotates the refresh token: the cookie sent is revoked and a new one is set. Sending an already-used refresh token revokes the whole session (theft detection).',
+          parameters: [
+            { name: 'refresh_token', in: 'cookie', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: sessionOk('Session refreshed'),
+            401: errorResponse(
+              'Missing, unknown, expired or reused refresh token',
+              'INVALID_REFRESH_TOKEN',
+              'Session is invalid or has expired; log in again',
+            ),
+            503: serviceUnavailable,
+          },
+        },
+      },
+      '/api/v1/auth/logout': {
+        post: {
+          tags: ['Auth'],
+          summary: 'End the session',
+          description:
+            'Revokes the refresh token (and its whole session) and clears the cookie. Always 204.',
+          parameters: [
+            { name: 'refresh_token', in: 'cookie', required: false, schema: { type: 'string' } },
+          ],
+          responses: { 204: { description: 'Logged out' }, 503: serviceUnavailable },
+        },
+      },
+      '/api/v1/users/me': {
+        get: {
+          tags: ['Users'],
+          summary: 'The signed-in user',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: { description: 'Current user', content: jsonContent(envelope('PublicUser')) },
+            401: unauthorized,
+            503: serviceUnavailable,
+          },
+        },
+      },
       '/api/v1/urls': {
         post: {
           tags: ['URLs'],
+          // Either anonymous or signed in; signed-in users own the link.
+          security: [{}, { bearerAuth: [] }],
           summary: 'Shorten a URL',
           description:
             'Only public http(s) URLs are accepted: no localhost, private or link-local IPs, embedded credentials, or links to this service.',
@@ -68,6 +188,7 @@ export function buildOpenApiDocument(config: Config) {
                 },
               },
             },
+            401: unauthorized,
             400: errorResponse(
               'Malformed JSON, schema violation (VALIDATION_ERROR) or a URL that is not allowed (INVALID_URL)',
               'INVALID_URL',
@@ -136,7 +257,19 @@ export function buildOpenApiDocument(config: Config) {
       },
     },
     components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'Access token from register, login or refresh. Expires after 15 minutes.',
+        },
+      },
       schemas: {
+        RegisterRequest: jsonSchema(registerBody, 'input'),
+        LoginRequest: jsonSchema(loginBody, 'input'),
+        PublicUser: jsonSchema(publicUser, 'output'),
+        Session: jsonSchema(sessionResponse, 'output'),
         CreateUrlRequest: jsonSchema(createUrlBody, 'input'),
         ShortenedUrl: jsonSchema(shortenedUrl, 'output'),
         ErrorResponse: {

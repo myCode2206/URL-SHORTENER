@@ -24,7 +24,9 @@ export function resolveTestDatabaseUrl(): string {
 }
 
 export async function resetDatabase(prisma: Database): Promise<void> {
-  await prisma.$executeRawUnsafe('TRUNCATE users, urls, clicks RESTART IDENTITY CASCADE');
+  await prisma.$executeRawUnsafe(
+    'TRUNCATE users, refresh_tokens, urls, clicks RESTART IDENTITY CASCADE',
+  );
 }
 
 // IDs restart at 1 after a reset, so codes repeat across tests. Redis must be

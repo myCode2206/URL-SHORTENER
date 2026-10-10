@@ -23,6 +23,8 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-member-access': 'off',
       '@typescript-eslint/no-unsafe-argument': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',
+      // In-memory fakes are async to match the real repositories' signatures.
+      '@typescript-eslint/require-await': 'off',
     },
   },
   {

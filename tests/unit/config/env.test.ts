@@ -5,9 +5,15 @@ const required = {
   BASE_URL: 'https://sho.rt',
   SHORT_CODE_SECRET: 'x'.repeat(32),
   REDIS_URL: 'redis://:pass@localhost:6379/0',
+  JWT_ACCESS_SECRET: 'j'.repeat(32),
 };
 
 describe('loadConfig', () => {
+  it('uses Secure cookies only in production', () => {
+    expect(loadConfig(required).auth.secureCookies).toBe(false);
+    expect(loadConfig({ ...required, NODE_ENV: 'production' }).auth.secureCookies).toBe(true);
+  });
+
   it('accepts rediss:// for TLS connections (ElastiCache in transit encryption)', () => {
     const config = loadConfig({ ...required, REDIS_URL: 'rediss://cache.aws:6379' });
     expect(config.redis.url).toBe('rediss://cache.aws:6379');
@@ -31,6 +37,12 @@ describe('loadConfig', () => {
       baseUrl: 'https://sho.rt',
       redis: { url: required.REDIS_URL, commandTimeoutMs: 100, connectTimeoutMs: 2000 },
       cache: { ttlSeconds: 3600, negativeTtlSeconds: 60 },
+      auth: {
+        jwtSecret: required.JWT_ACCESS_SECRET,
+        accessTokenTtlSeconds: 900,
+        refreshTokenTtlDays: 30,
+        secureCookies: false,
+      },
     });
   });
 
@@ -59,6 +71,8 @@ describe('loadConfig', () => {
     [{ BASE_URL: 'https://sho.rt/links' }, 'BASE_URL'],
     [{ SHORT_CODE_SECRET: 'too-short' }, 'SHORT_CODE_SECRET'],
     [{ REDIS_URL: undefined }, 'REDIS_URL'],
+    [{ JWT_ACCESS_SECRET: 'short' }, 'JWT_ACCESS_SECRET'],
+    [{ ACCESS_TOKEN_TTL_SECONDS: '86400' }, 'ACCESS_TOKEN_TTL_SECONDS'],
     [{ REDIS_URL: 'http://localhost:6379' }, 'REDIS_URL'],
     [{ CACHE_TTL_SECONDS: '0' }, 'CACHE_TTL_SECONDS'],
   ])('fails fast with a message naming the bad variable: %j', (env, name) => {

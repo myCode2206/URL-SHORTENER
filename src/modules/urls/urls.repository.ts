@@ -5,6 +5,8 @@ export interface NewUrl {
   id: bigint;
   shortCode: string;
   originalUrl: string;
+  // null for links created anonymously.
+  userId: string | null;
 }
 
 // Everything a redirect needs, and nothing more. Phase 5 caches exactly this

@@ -29,9 +29,39 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  urls Url[]
+  urls          Url[]
+  refreshTokens RefreshToken[]
 
   @@map("users")
+}
+
+// One row per refresh token ever issued. Tokens are random strings; only their
+// SHA-256 hash is stored, so a leaked copy of this table can't be used to log in.
+//
+// Rotation: every refresh revokes the token used and issues a new one in the
+// same family. Presenting a revoked token means it was copied and used twice
+// (theft, or a replayed request), so the whole family is revoked: attacker and
+// victim are both logged out, and the victim signs in again with their password.
+model RefreshToken {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  // Every token descended from one login shares a family ID.
+  familyId  String    @map("family_id") @db.Uuid
+  // Unique index: each refresh looks the token up by its hash.
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  // Set when the token is used (rotated), on logout, or when its family is
+  // revoked. Kept rather than deleted: a later reuse must be recognisable.
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Revoking a family (reuse detected, or logout) updates every row by family.
+  @@index([familyId])
+  // The foreign key, and "sign out of all devices" for one user.
+  @@index([userId])
+  @@map("refresh_tokens")
 }
 
 model Url {

@@ -29,7 +29,8 @@ export class UrlService {
     this.ownHostname = new URL(deps.baseUrl).hostname;
   }
 
-  async shorten(input: { url: string }): Promise<ShortenedUrl> {
+  // userId is null for anonymous requests; signed-in users own their links.
+  async shorten(input: { url: string }, userId: string | null): Promise<ShortenedUrl> {
     const originalUrl = normalizeDestinationUrl(input.url, this.ownHostname);
 
     // Reserve the ID first, so the code is known before the row is written.
@@ -37,7 +38,7 @@ export class UrlService {
     // complete, instead of being inserted and then updated with its code.
     const id = await this.deps.idGenerator.nextId();
     const shortCode = this.deps.codec.encode(id);
-    const url = await this.deps.repository.create({ id, shortCode, originalUrl });
+    const url = await this.deps.repository.create({ id, shortCode, originalUrl, userId });
 
     // Write-through: new links are usually shared and clicked right away, so
     // the first click is a cache hit. It also replaces any cached "doesn't

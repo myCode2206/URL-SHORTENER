@@ -11,8 +11,8 @@ A URL shortener built to production standards with Node.js, TypeScript, Express,
 | 3     | URL creation and Base62            | ✅ Done |
 | 4     | Redirects                          | ✅ Done |
 | 5     | Redis caching                      | ✅ Done |
-| 6     | Authentication                     | ⏳ Next |
-| 7     | URL management                     |         |
+| 6     | Authentication                     | ✅ Done |
+| 7     | URL management                     | ⏳ Next |
 | 8     | Expiration and custom aliases      |         |
 | 9     | Analytics                          |         |
 | 10    | Rate limiting and security         |         |
@@ -76,10 +76,12 @@ src/
 │   ├── database/          # Prisma client, ID generator, readiness check
 │   └── redis/             # Redis client (fail-fast) and readiness check
 ├── docs/openapi.ts        # OpenAPI 3.1 document, built from the Zod schemas
-├── middleware/            # Request IDs and the central error handler
+├── middleware/            # Request IDs, authentication, central error handler
 ├── utils/singleFlight.ts  # Merges concurrent identical lookups
 ├── modules/
 │   ├── analytics/         # Click events, buffered recorder, batch writer
+│   ├── auth/              # Register, login, refresh (rotation), logout
+│   ├── users/             # GET /api/v1/users/me
 │   ├── health/            # Liveness and readiness endpoints
 │   └── urls/              # routes → controller → service → repository
 │       ├── redirect.*         # GET /:shortCode, the hot path
@@ -160,6 +162,32 @@ every second, in the background:
 - **Clicks never slow a redirect down.** The redirect returns before the click is written. Up to 10,000 clicks wait in memory, and beyond that new clicks are dropped instead of using up memory. Clicks still in the buffer are written on graceful shutdown; Phase 9 moves them to a durable queue.
 - **Browsers get an HTML page** for dead links; API clients get the JSON error format.
 - **Measured, without a cache yet:** 6,373 redirects/s, p50 2.7 ms, p99 8.4 ms, on one process on a laptop.
+
+## Authentication
+
+| Endpoint                     | Purpose                                                                     |
+| ---------------------------- | --------------------------------------------------------------------------- |
+| `POST /api/v1/auth/register` | Create an account; returns an access token and sets a refresh cookie        |
+| `POST /api/v1/auth/login`    | Same, for an existing account                                               |
+| `POST /api/v1/auth/refresh`  | Swap the refresh cookie for a new access token **and** a new refresh cookie |
+| `POST /api/v1/auth/logout`   | Revoke the session and clear the cookie                                     |
+| `GET /api/v1/users/me`       | The signed-in user (needs `Authorization: Bearer <access token>`)           |
+
+```text
+login ──► access token (JWT, 15 min, JSON body)   → Authorization: Bearer … on API calls
+      └─► refresh token (random, 30 days, cookie) → only ever sent to /api/v1/auth/*
+
+refresh with token A ──► A revoked, B issued (same session "family")
+refresh with A again ──► A was already used: a copy exists (theft or replay)
+                         → whole family revoked, attacker and owner both logged out
+```
+
+- **Passwords:** Argon2id (19 MiB, t=2, p=1, OWASP's recommended minimum), at least 12 characters with no composition rules. Older, weaker hashes are re-hashed on login.
+- **Access tokens:** HS256 with the algorithm pinned (rejects `alg: none` and algorithm-confusion forgeries), issuer and audience checked, 15 minutes. Verified without a database lookup.
+- **Refresh tokens:** 256-bit random, stored only as SHA-256 hashes, single-use with rotation. Rotation is atomic, so two simultaneous uses can't both succeed.
+- **Cookie:** `HttpOnly` (JavaScript can't read it), `SameSite=Strict` (CSRF), `Path=/api/v1/auth`, and `Secure` in production.
+- **No account enumeration:** a wrong password and an unknown email get the same error and take about the same time.
+- **Ownership:** `POST /api/v1/urls` with a token records the user as the link's owner; without one, the link is anonymous.
 
 ## Redis caching
 

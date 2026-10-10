@@ -37,10 +37,15 @@ describe('UrlService.shorten', () => {
   it('reserves an ID, encodes it, and stores the normalised URL', async () => {
     const { service, codec, created } = setup();
 
-    const result = await service.shorten({ url: 'HTTPS://Example.com/a' });
+    const result = await service.shorten({ url: 'HTTPS://Example.com/a' }, null);
 
     expect(created).toEqual([
-      { id: 100n, shortCode: codec.encode(100n), originalUrl: 'https://example.com/a' },
+      {
+        id: 100n,
+        shortCode: codec.encode(100n),
+        originalUrl: 'https://example.com/a',
+        userId: null,
+      },
     ]);
     expect(result).toEqual({
       shortCode: codec.encode(100n),
@@ -52,7 +57,7 @@ describe('UrlService.shorten', () => {
 
   it('writes the new link to the cache so the first click is a hit', async () => {
     const { service, cache, codec } = setup();
-    await service.shorten({ url: 'https://example.com/a' });
+    await service.shorten({ url: 'https://example.com/a' }, null);
     expect(cache.set).toHaveBeenCalledWith(codec.encode(100n), {
       id: 100n,
       originalUrl: 'https://example.com/a',
@@ -61,17 +66,23 @@ describe('UrlService.shorten', () => {
     });
   });
 
+  it('records the owner when a signed-in user shortens a URL', async () => {
+    const { service, created } = setup();
+    await service.shorten({ url: 'https://example.com' }, 'user-123');
+    expect(created[0]?.userId).toBe('user-123');
+  });
+
   it('gives each call a new ID and code, even for the same URL', async () => {
     const { service } = setup();
-    const first = await service.shorten({ url: 'https://example.com' });
-    const second = await service.shorten({ url: 'https://example.com' });
+    const first = await service.shorten({ url: 'https://example.com' }, null);
+    const second = await service.shorten({ url: 'https://example.com' }, null);
     expect(first.shortCode).not.toBe(second.shortCode);
   });
 
   it('rejects a bad URL before reserving an ID or writing anything', async () => {
     const { service, idGenerator, repository } = setup();
 
-    await expect(service.shorten({ url: 'http://169.254.169.254/' })).rejects.toBeInstanceOf(
+    await expect(service.shorten({ url: 'http://169.254.169.254/' }, null)).rejects.toBeInstanceOf(
       AppError,
     );
     expect(idGenerator.nextId).not.toHaveBeenCalled();
@@ -80,7 +91,7 @@ describe('UrlService.shorten', () => {
 
   it('rejects links back to its own domain', async () => {
     const { service } = setup();
-    await expect(service.shorten({ url: 'https://sho.rt/abc1234' })).rejects.toMatchObject({
+    await expect(service.shorten({ url: 'https://sho.rt/abc1234' }, null)).rejects.toMatchObject({
       code: 'INVALID_URL',
     });
   });

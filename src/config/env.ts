@@ -27,6 +27,11 @@ const envSchema = z.object({
   REDIS_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
   CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
   CACHE_NEGATIVE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
+  // Signs access tokens (HS256). Anyone holding it can mint a token for any
+  // user, so it lives only in the secret store. Rotating it logs everyone out.
+  JWT_ACCESS_SECRET: z.string().min(32, 'must be at least 32 characters'),
+  ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
   // The public origin short links are built on, e.g. https://sho.rt
   BASE_URL: z
     .url({ protocol: /^https?$/ })
@@ -73,6 +78,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     cache: {
       ttlSeconds: vars.CACHE_TTL_SECONDS,
       negativeTtlSeconds: vars.CACHE_NEGATIVE_TTL_SECONDS,
+    },
+    auth: {
+      jwtSecret: vars.JWT_ACCESS_SECRET,
+      accessTokenTtlSeconds: vars.ACCESS_TOKEN_TTL_SECONDS,
+      refreshTokenTtlDays: vars.REFRESH_TOKEN_TTL_DAYS,
+      // Secure cookies are only sent over HTTPS. Production is always HTTPS
+      // (TLS ends at the load balancer); local development is plain HTTP.
+      secureCookies: vars.NODE_ENV === 'production',
     },
     baseUrl: vars.BASE_URL,
     shortCodeSecret: vars.SHORT_CODE_SECRET,

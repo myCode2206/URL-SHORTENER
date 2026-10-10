@@ -6,6 +6,7 @@ process.env.NODE_ENV = 'test';
 process.env.LOG_LEVEL = 'silent';
 process.env.BASE_URL = 'http://short.test';
 process.env.SHORT_CODE_SECRET = 'test-secret-that-is-at-least-32-characters-long';
+process.env.JWT_ACCESS_SECRET = 'test-jwt-secret-that-is-at-least-32-characters';
 
 // Unit tests don't need a database or Redis, so they still run (e.g. in CI)
 // without either. resolveTestDatabaseUrl also loads .env.
