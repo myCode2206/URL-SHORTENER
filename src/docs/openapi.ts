@@ -1,7 +1,14 @@
 import { z } from 'zod';
 import type { Config } from '../config/env';
 import { loginBody, publicUser, registerBody, sessionResponse } from '../modules/auth/auth.schemas';
-import { createUrlBody, shortenedUrl } from '../modules/urls/urls.schemas';
+import {
+  createUrlBody,
+  listUrlsQuery,
+  shortenedUrl,
+  updateUrlBody,
+  urlPage,
+  urlView,
+} from '../modules/urls/urls.schemas';
 
 type JsonSchema = Record<string, unknown>;
 
@@ -62,7 +69,37 @@ const sessionOk = (status: string) => ({
   content: jsonContent(envelope('Session')),
 });
 
+// Turns a Zod object schema for a query string into OpenAPI parameters, so the
+// documented parameters are exactly the ones the endpoint validates.
+function queryParameters(schema: z.ZodType) {
+  const { properties = {}, required = [] } = jsonSchema(schema, 'input') as {
+    properties?: Record<string, JsonSchema>;
+    required?: string[];
+  };
+  return Object.entries(properties).map(([name, property]) => ({
+    name,
+    in: 'query',
+    required: required.includes(name),
+    schema: property,
+    ...(typeof property.description === 'string' && { description: property.description }),
+  }));
+}
+
+const shortCodePath = {
+  name: 'shortCode',
+  in: 'path',
+  required: true,
+  description: 'The link’s short code (its identifier throughout the API)',
+  schema: { type: 'string', maxLength: 64 },
+};
+
 export function buildOpenApiDocument(config: Config) {
+  const notOwned = errorResponse(
+    'No such link, or it belongs to someone else (deliberately indistinguishable)',
+    'URL_NOT_FOUND',
+    'Short URL does not exist',
+  );
+
   return {
     openapi: '3.1.0',
     info: {
@@ -164,6 +201,23 @@ export function buildOpenApiDocument(config: Config) {
         },
       },
       '/api/v1/urls': {
+        get: {
+          tags: ['URLs'],
+          summary: 'List your links (cursor pagination)',
+          description:
+            'Pass `pageInfo.nextCursor` back as `cursor` for the next page; keep the other parameters the same. No total count: counting every matching row would cost as much as reading them.',
+          security: [{ bearerAuth: [] }],
+          parameters: queryParameters(listUrlsQuery),
+          responses: {
+            200: { description: 'One page of links', content: jsonContent(envelope('UrlPage')) },
+            400: errorResponse(
+              'Invalid parameter or cursor',
+              'INVALID_CURSOR',
+              'Cursor was created for a different sort order',
+            ),
+            401: unauthorized,
+          },
+        },
         post: {
           tags: ['URLs'],
           // Either anonymous or signed in; signed-in users own the link.
@@ -201,6 +255,45 @@ export function buildOpenApiDocument(config: Config) {
             ),
             503: serviceUnavailable,
           },
+        },
+      },
+      '/api/v1/urls/{shortCode}': {
+        parameters: [shortCodePath],
+        get: {
+          tags: ['URLs'],
+          summary: 'One of your links',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: { description: 'The link', content: jsonContent(envelope('UrlView')) },
+            401: unauthorized,
+            404: notOwned,
+          },
+        },
+        patch: {
+          tags: ['URLs'],
+          summary: 'Enable/disable a link or change its expiry',
+          description:
+            'Takes effect for redirects immediately (the cache entry is overwritten). The destination URL cannot be changed: that would allow bait-and-switch after a link is shared.',
+          security: [{ bearerAuth: [] }],
+          requestBody: { required: true, content: jsonContent(ref('UpdateUrlRequest')) },
+          responses: {
+            200: { description: 'Updated link', content: jsonContent(envelope('UrlView')) },
+            400: errorResponse(
+              'Invalid body, or expiresAt in the past',
+              'INVALID_EXPIRY',
+              'expiresAt must be in the future',
+            ),
+            401: unauthorized,
+            404: notOwned,
+          },
+        },
+        delete: {
+          tags: ['URLs'],
+          summary: 'Delete a link',
+          description:
+            'Soft delete: redirects return 404 immediately, and the code is never reissued, so a shared link can never start pointing somewhere new.',
+          security: [{ bearerAuth: [] }],
+          responses: { 204: { description: 'Deleted' }, 401: unauthorized, 404: notOwned },
         },
       },
       '/{shortCode}': {
@@ -270,6 +363,16 @@ export function buildOpenApiDocument(config: Config) {
         LoginRequest: jsonSchema(loginBody, 'input'),
         PublicUser: jsonSchema(publicUser, 'output'),
         Session: jsonSchema(sessionResponse, 'output'),
+        UrlView: jsonSchema(urlView, 'output'),
+        UrlPage: {
+          ...jsonSchema(urlPage, 'output'),
+          properties: {
+            items: { type: 'array', items: ref('UrlView') },
+            pageInfo: (jsonSchema(urlPage, 'output').properties as Record<string, unknown>)
+              .pageInfo,
+          },
+        },
+        UpdateUrlRequest: jsonSchema(updateUrlBody, 'input'),
         CreateUrlRequest: jsonSchema(createUrlBody, 'input'),
         ShortenedUrl: jsonSchema(shortenedUrl, 'output'),
         ErrorResponse: {

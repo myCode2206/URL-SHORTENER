@@ -122,7 +122,9 @@ describe('indexes', () => {
     expect(defs.urls_short_code_key).toContain('UNIQUE INDEX');
     expect(defs.urls_custom_alias_key).toContain('UNIQUE INDEX');
     expect(defs.users_email_key).toContain('UNIQUE INDEX');
-    expect(defs.urls_user_id_created_at_id_idx).toContain('(user_id, created_at DESC, id DESC)');
+    expect(defs.urls_user_id_created_at_short_code_idx).toContain(
+      '(user_id, created_at DESC, short_code DESC)',
+    );
     expect(defs.clicks_url_id_clicked_at_idx).toContain('(url_id, clicked_at)');
   });
 

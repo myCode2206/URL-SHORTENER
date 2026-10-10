@@ -98,11 +98,16 @@ model Url {
   clicks Click[]
 
   // Composite index for "my URLs, newest first" (GET /api/v1/urls). The order
-  // of columns matters: Postgres jumps straight to one user's rows, which are
-  // already sorted by date, and reads one page. `id` breaks ties between rows
-  // created in the same millisecond, which cursor pagination (Phase 7) needs.
+  // of columns matters: Postgres jumps straight to one user's rows, already
+  // sorted by date, and reads exactly one page.
+  //
+  // short_code breaks ties between links created in the same millisecond, which
+  // cursor pagination needs: each position must be unique. It replaced `id`
+  // (Phase 7): the cursor contains the tie-breaker, and short codes are public,
+  // whereas internal IDs reveal how many links exist.
+  //
   // It also serves the foreign key, so deleting a user doesn't scan every URL.
-  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc), shortCode(sort: Desc)])
   @@map("urls")
 }
 

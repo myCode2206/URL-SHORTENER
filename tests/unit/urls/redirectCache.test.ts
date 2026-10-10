@@ -14,7 +14,9 @@ function fakeRedis() {
     store,
     ttls,
     get: jest.fn((key: string) => Promise.resolve(store.get(key) ?? null)),
-    set: jest.fn((key: string, value: string, _ex: 'EX', seconds: number) => {
+    set: jest.fn((key: string, value: string, _ex: 'EX', seconds: number, nx?: 'NX') => {
+      // NX: only set if the key doesn't exist (Redis returns null otherwise).
+      if (nx === 'NX' && store.has(key)) return Promise.resolve(null);
       store.set(key, value);
       ttls.set(key, seconds);
       return Promise.resolve('OK' as const);
@@ -83,6 +85,35 @@ describe('RedirectCache', () => {
     expect([...redis.store.keys()]).toEqual(['redirect:v1:aB7xK2q']);
   });
 
+  it('fill writes only when nothing is cached (SET NX)', async () => {
+    const redis = fakeRedis();
+    const cache = new RedirectCache(redis as never, OPTIONS, logger);
+
+    await cache.fill('aB7xK2q', target);
+    await cache.fill('aB7xK2q', { ...target, isActive: false });
+
+    await expect(cache.get('aB7xK2q')).resolves.toEqual({ hit: true, target });
+  });
+
+  it('set always overwrites, so a write path replaces whatever was cached', async () => {
+    const cache = new RedirectCache(fakeRedis() as never, OPTIONS, logger);
+    await cache.fill('aB7xK2q', target);
+
+    await cache.set('aB7xK2q', { ...target, isActive: false });
+
+    await expect(cache.get('aB7xK2q')).resolves.toMatchObject({ target: { isActive: false } });
+  });
+
+  it('closes the stale-read race: a late fill cannot undo a newer set', async () => {
+    const cache = new RedirectCache(fakeRedis() as never, OPTIONS, logger);
+    // reader missed and read the OLD row; meanwhile the writer stored the NEW state
+    await cache.set('aB7xK2q', { ...target, isActive: false });
+    // now the slow reader tries to cache what it read
+    await cache.fill('aB7xK2q', target);
+
+    await expect(cache.get('aB7xK2q')).resolves.toMatchObject({ target: { isActive: false } });
+  });
+
   it('removes an entry on invalidate', async () => {
     const cache = new RedirectCache(fakeRedis() as never, OPTIONS, logger);
     await cache.set('aB7xK2q', target);
@@ -104,7 +135,8 @@ describe('RedirectCache', () => {
       await expect(cache.get('aB7xK2q')).resolves.toEqual({ hit: false });
     });
 
-    it('set and invalidate resolve instead of throwing', async () => {
+    it('fill, set and invalidate resolve instead of throwing', async () => {
+      await expect(cache.fill('aB7xK2q', target)).resolves.toBeUndefined();
       await expect(cache.set('aB7xK2q', target)).resolves.toBeUndefined();
       await expect(cache.invalidate('aB7xK2q')).resolves.toBeUndefined();
     });

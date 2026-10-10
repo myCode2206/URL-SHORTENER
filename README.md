@@ -12,8 +12,8 @@ A URL shortener built to production standards with Node.js, TypeScript, Express,
 | 4     | Redirects                          | ✅ Done |
 | 5     | Redis caching                      | ✅ Done |
 | 6     | Authentication                     | ✅ Done |
-| 7     | URL management                     | ⏳ Next |
-| 8     | Expiration and custom aliases      |         |
+| 7     | URL management                     | ✅ Done |
+| 8     | Expiration and custom aliases      | ⏳ Next |
 | 9     | Analytics                          |         |
 | 10    | Rate limiting and security         |         |
 | 11    | Testing                            |         |
@@ -85,7 +85,9 @@ src/
 │   ├── health/            # Liveness and readiness endpoints
 │   └── urls/              # routes → controller → service → repository
 │       ├── redirect.*         # GET /:shortCode, the hot path
-│       ├── redirectCache.ts   # Redis cache-aside for redirect targets
+│       ├── redirectCache.ts   # Redis cache-aside for redirect targets (fill vs set)
+│       ├── urlManagement.service.ts  # List, get, update, delete your links
+│       ├── cursor.ts          # Opaque keyset-pagination cursors
 │       ├── shortCode.ts       # ID → scramble (Feistel) → 7-char Base62
 │       └── destinationUrl.ts  # URL validation and SSRF rules
 ├── container.ts           # Composition root: wires concrete implementations
@@ -188,6 +190,33 @@ refresh with A again ──► A was already used: a copy exists (theft or repla
 - **Cookie:** `HttpOnly` (JavaScript can't read it), `SameSite=Strict` (CSRF), `Path=/api/v1/auth`, and `Secure` in production.
 - **No account enumeration:** a wrong password and an unknown email get the same error and take about the same time.
 - **Ownership:** `POST /api/v1/urls` with a token records the user as the link's owner; without one, the link is anonymous.
+
+## Managing your links
+
+All of these require `Authorization: Bearer <access token>`. Links are identified by their short code, and the internal database ID never leaves the server.
+
+| Endpoint                         | Purpose                                                                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/urls`               | List your links: `limit` (1–100), `cursor`, `sort` (`createdAt`, `clickCount`), `order`, `status` (`active`, `disabled`, `expired`), `search`, `createdFrom`, `createdTo` |
+| `GET /api/v1/urls/:shortCode`    | One link                                                                                                                                                                  |
+| `PATCH /api/v1/urls/:shortCode`  | `isActive`, `expiresAt` (in the future, or `null`). The destination can't be changed                                                                                      |
+| `DELETE /api/v1/urls/:shortCode` | Soft delete: redirects return 404 at once, and the code is never reused                                                                                                   |
+
+- **Someone else's link returns 404, never 403,** so nobody can probe which codes exist. The owner check is part of every SQL query, not a separate step.
+- **Changes reach redirects immediately.** Every write overwrites the cache entry, while the redirect path only fills an empty one (`SET NX`). So a slow redirect can't re-cache a link's old state after it has been disabled.
+
+### Why cursor pagination
+
+Measured on 300,000 links for one user:
+
+| Page starting at row | `LIMIT 21 OFFSET n`              | Cursor `WHERE (created_at, short_code) < (…)` |
+| -------------------- | -------------------------------- | --------------------------------------------- |
+| 0                    | 0.03 ms                          | 0.03 ms                                       |
+| 10,000               | 1.20 ms                          | 0.05 ms                                       |
+| 100,000              | 12.30 ms                         | 0.05 ms                                       |
+| 290,000              | 30.06 ms (read **290,021** rows) | 0.04 ms (read **21** rows)                    |
+
+`OFFSET` reads and throws away every row before the page, so each page is slower than the last. A cursor jumps straight to the right place in the index. Cursors also stay correct while links are being added; with `OFFSET`, items shift between pages and get repeated or skipped. The trade-off: no "jump to page 37" and no total count, since counting every matching row would cost as much as reading them.
 
 ## Redis caching
 

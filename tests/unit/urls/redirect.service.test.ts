@@ -38,7 +38,7 @@ function setup(found: RedirectTarget | null = target(), cached: CacheLookup = { 
   const repository = { findRedirectTarget: jest.fn(() => Promise.resolve(found)) };
   const cache = {
     get: jest.fn((_code: string) => Promise.resolve(cached)),
-    set: jest.fn((_code: string, _target: RedirectTarget | null) => Promise.resolve()),
+    fill: jest.fn((_code: string, _target: RedirectTarget | null) => Promise.resolve()),
   };
   const clickRecorder = { record: jest.fn((event: ClickEvent) => void recorded.push(event)) };
   const service = new RedirectService({ repository, cache, clickRecorder, now: () => NOW });
@@ -137,13 +137,13 @@ describe('RedirectService caching (cache-aside)', () => {
     await service.resolve('aB7xK2q', visit);
 
     expect(repository.findRedirectTarget).toHaveBeenCalledWith('aB7xK2q');
-    expect(cache.set).toHaveBeenCalledWith('aB7xK2q', target());
+    expect(cache.fill).toHaveBeenCalledWith('aB7xK2q', target());
   });
 
   it('on a miss for a missing code, caches the absence', async () => {
     const { service, cache } = setup(null);
     await expect(service.resolve('aB7xK2q', visit)).rejects.toMatchObject({ statusCode: 404 });
-    expect(cache.set).toHaveBeenCalledWith('aB7xK2q', null);
+    expect(cache.fill).toHaveBeenCalledWith('aB7xK2q', null);
   });
 
   it('collapses concurrent misses for one code into a single database query', async () => {
@@ -165,7 +165,7 @@ describe('RedirectService caching (cache-aside)', () => {
 
   it('never makes the visitor wait for the cache write', async () => {
     const { service, cache } = setup(target());
-    cache.set.mockReturnValue(new Promise(() => {})); // a write that never finishes
+    cache.fill.mockReturnValue(new Promise(() => {})); // a write that never finishes
     await expect(service.resolve('aB7xK2q', visit)).resolves.toBe('https://example.com/');
   });
 });

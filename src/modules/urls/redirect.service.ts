@@ -26,7 +26,7 @@ export interface Visit {
 
 export interface RedirectServiceDependencies {
   repository: Pick<UrlRepository, 'findRedirectTarget'>;
-  cache: Pick<RedirectCache, 'get' | 'set'>;
+  cache: Pick<RedirectCache, 'get' | 'fill'>;
   clickRecorder: ClickRecorder;
   now?: () => Date;
 }
@@ -86,9 +86,9 @@ export class RedirectService {
     // If 1,000 requests miss on the same code at once, they share one query.
     return this.databaseLookups.run(shortCode, async () => {
       const target = await this.deps.repository.findRedirectTarget(shortCode);
-      // Not awaited: the visitor shouldn't wait for the cache write. set()
-      // never throws, so nothing is left unhandled.
-      void this.deps.cache.set(shortCode, target);
+      // Not awaited: the visitor shouldn't wait for the cache write. fill()
+      // never throws, and never overwrites a value a writer stored meanwhile.
+      void this.deps.cache.fill(shortCode, target);
       return target;
     });
   }

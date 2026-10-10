@@ -53,36 +53,62 @@ export class RedirectCache {
     }
   }
 
-  // Stores a found target, or remembers that the code doesn't exist.
-  async set(shortCode: string, target: RedirectTarget | null): Promise<void> {
-    try {
-      if (target) {
-        await this.redis.set(KEY_PREFIX + shortCode, serialize(target), 'EX', this.jitteredTtl());
-      } else {
-        await this.redis.set(
-          KEY_PREFIX + shortCode,
-          MISSING,
-          'EX',
-          this.options.negativeTtlSeconds,
-        );
-      }
-    } catch (err) {
-      this.reportFailure('set', err);
-    }
+  // Two ways to write, and the difference matters:
+  //
+  // fill: used by the read path after a cache miss. Writes only if the key is
+  //   absent (SET NX), so it can never overwrite a newer value.
+  // set:  used by write paths (create, update, delete). Always overwrites.
+  //
+  // Together they close the classic cache-aside race, where a slow reader
+  // caches the old row just after a writer has updated it:
+  //
+  //   reader: miss → reads OLD row ────────────────────┐
+  //   writer:          updates row → set(NEW)          │
+  //   reader:                              fill(OLD) ← NX: key exists, ignored
+  //
+  // With "delete on write" instead, the reader's late write would succeed and
+  // a disabled link could keep redirecting for the rest of the TTL.
+  async fill(shortCode: string, target: RedirectTarget | null): Promise<void> {
+    await this.write('fill', shortCode, target, true);
   }
 
-  // Called after a link changes (disabled, deleted, expiry edited) so the next
-  // redirect reads the new state from the database. Phases 7 and 8 use it.
+  async set(shortCode: string, target: RedirectTarget | null): Promise<void> {
+    await this.write('set', shortCode, target, false);
+  }
+
+  // Removes an entry outright; the next redirect reads PostgreSQL.
   async invalidate(shortCode: string): Promise<void> {
     try {
       await this.redis.del(KEY_PREFIX + shortCode);
     } catch (err) {
-      // Worse than a failed read: the old entry stays until its TTL expires.
-      // The TTL is what bounds how long a link can be stale.
+      // The old entry stays until its TTL expires; the TTL bounds how stale it gets.
       this.logger.error(
         { err, shortCode },
         'cache invalidation failed; entry may be stale until TTL',
       );
+    }
+  }
+
+  // A found target, or a marker that the code doesn't exist (negative caching).
+  private async write(
+    operation: 'fill' | 'set',
+    shortCode: string,
+    target: RedirectTarget | null,
+    onlyIfAbsent: boolean,
+  ): Promise<void> {
+    const value = target ? serialize(target) : MISSING;
+    const ttl = target ? this.jitteredTtl() : this.options.negativeTtlSeconds;
+    try {
+      if (onlyIfAbsent) await this.redis.set(KEY_PREFIX + shortCode, value, 'EX', ttl, 'NX');
+      else await this.redis.set(KEY_PREFIX + shortCode, value, 'EX', ttl);
+    } catch (err) {
+      if (operation === 'set') {
+        // A failed overwrite can leave the previous state cached (for example
+        // a link that was just disabled) until its TTL expires.
+        this.logger.error({ err, shortCode }, 'cache update failed; entry may be stale until TTL');
+      } else {
+        this.reportFailure(operation, err);
+      }
     }
   }
 

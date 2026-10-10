@@ -71,7 +71,7 @@ export function createApp({
 
   app.use('/api/v1/auth', authRoutes(authController));
   app.use('/api/v1/users', usersRoutes(usersController, requireAuth));
-  app.use('/api/v1/urls', urlRoutes(urlController, optionalAuth));
+  app.use('/api/v1/urls', urlRoutes(urlController, { requireAuth, optionalAuth }));
   // Must stay last: /:shortCode matches any single path segment.
   app.use(redirectRoutes(redirectController));
 

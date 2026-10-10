@@ -13,6 +13,7 @@ import { HealthService } from './modules/health/health.service';
 import { RedirectCache } from './modules/urls/redirectCache';
 import { RedirectController } from './modules/urls/redirect.controller';
 import { RedirectService } from './modules/urls/redirect.service';
+import { UrlManagementService } from './modules/urls/urlManagement.service';
 import { createShortCodeCodec } from './modules/urls/shortCode';
 import { UrlController } from './modules/urls/urls.controller';
 import { UrlRepository } from './modules/urls/urls.repository';
@@ -74,7 +75,14 @@ export function createContainer(config: Config, logger: Logger) {
     redirectCache,
     clickRecorder,
     health: new HealthService([databaseCheck(prisma), redisCheck(redis)]),
-    urlController: new UrlController(urlService),
+    urlController: new UrlController(
+      urlService,
+      new UrlManagementService({
+        repository: urlRepository,
+        cache: redirectCache,
+        baseUrl: config.baseUrl,
+      }),
+    ),
     redirectController: new RedirectController(redirectService),
     authController: new AuthController(authService, config.auth.secureCookies),
     usersController: new UsersController(new UsersService(usersRepository)),
